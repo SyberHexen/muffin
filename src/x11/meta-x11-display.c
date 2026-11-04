@@ -2012,6 +2012,7 @@ ensure_x11_display_logical_monitor_data (MetaLogicalMonitor *logical_monitor)
     return data;
 
   data = g_new0 (MetaX11DisplayLogicalMonitorData, 1);
+  data->xinerama_index = -1;
   g_object_set_qdata_full (G_OBJECT (logical_monitor),
                            quark_x11_display_logical_monitor_data,
                            data,
@@ -2029,8 +2030,12 @@ meta_x11_display_ensure_xinerama_indices (MetaX11Display *x11_display)
   GList *logical_monitors, *l;
   XineramaScreenInfo *infos;
   int n_infos, j;
+  gboolean all_matched = TRUE;
 
-  if (x11_display->has_xinerama_indices)
+  /* Xwayland updates its outputs some time after a monitor change, without
+   * the compositor being told, so under Wayland a cached mapping can go
+   * stale at any point. Look it up on every query there. */
+  if (x11_display->has_xinerama_indices && !meta_is_wayland_compositor ())
     return;
 
   x11_display->has_xinerama_indices = TRUE;
@@ -2052,8 +2057,13 @@ meta_x11_display_ensure_xinerama_indices (MetaX11Display *x11_display)
   for (l = logical_monitors; l; l = l->next)
     {
       MetaLogicalMonitor *logical_monitor = l->data;
+      gboolean matched = FALSE;
 
-      for (j = 0; j < n_infos; ++j)
+      ensure_x11_display_logical_monitor_data (logical_monitor)->xinerama_index = -1;
+
+      /* The first matching screen: right after a change Xwayland can
+       * briefly list a monitor twice. */
+      for (j = 0; j < n_infos && !matched; ++j)
         {
           if (logical_monitor->rect.x == infos[j].x_org &&
               logical_monitor->rect.y == infos[j].y_org &&
@@ -2065,11 +2075,20 @@ meta_x11_display_ensure_xinerama_indices (MetaX11Display *x11_display)
               logical_monitor_data =
                 ensure_x11_display_logical_monitor_data (logical_monitor);
               logical_monitor_data->xinerama_index = j;
+              matched = TRUE;
             }
         }
+
+      all_matched &= matched;
     }
 
   meta_XFree (infos);
+
+  /* Right after a monitor change the Xinerama screens can still show the
+   * old layout. Only keep a complete mapping, and look again on the next
+   * query otherwise. */
+  if (!all_matched)
+    x11_display->has_xinerama_indices = FALSE;
 }
 
 int
@@ -2083,6 +2102,17 @@ meta_x11_display_logical_monitor_to_xinerama_index (MetaX11Display     *x11_disp
   meta_x11_display_ensure_xinerama_indices (x11_display);
 
   logical_monitor_data = get_x11_display_logical_monitor_data (logical_monitor);
+
+  if (!logical_monitor_data)
+    {
+      g_warning ("Logical monitor has no X11 display data during xinerama "
+                 "index lookup, returning -1");
+      return -1;
+    }
+
+  /* Not on an Xinerama screen (yet): the indices are normally the same. */
+  if (logical_monitor_data->xinerama_index < 0)
+    return logical_monitor->number;
 
   return logical_monitor_data->xinerama_index;
 }
@@ -2110,6 +2140,19 @@ meta_x11_display_xinerama_index_to_logical_monitor (MetaX11Display *x11_display,
         ensure_x11_display_logical_monitor_data (logical_monitor);
 
       if (logical_monitor_data->xinerama_index == xinerama_index)
+        return logical_monitor;
+    }
+
+  /* Not matched to a logical monitor (yet): the indices are normally the
+   * same. */
+  for (l = logical_monitors; l; l = l->next)
+    {
+      MetaLogicalMonitor *logical_monitor = l->data;
+      MetaX11DisplayLogicalMonitorData *logical_monitor_data =
+        get_x11_display_logical_monitor_data (logical_monitor);
+
+      if (logical_monitor->number == xinerama_index &&
+          (!logical_monitor_data || logical_monitor_data->xinerama_index < 0))
         return logical_monitor;
     }
 
