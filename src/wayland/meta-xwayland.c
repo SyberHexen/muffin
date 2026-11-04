@@ -39,6 +39,7 @@
 #endif
 #include <unistd.h>
 #include <X11/Xauth.h>
+#include <X11/extensions/Xrandr.h>
 
 #include "backends/meta-backend-private.h"
 #include "backends/meta-logical-monitor.h"
@@ -865,10 +866,117 @@ meta_xwayland_init (MetaXWaylandManager *manager,
   return TRUE;
 }
 
+/*
+ * Tell Xwayland which output is primary. Without it X11 clients see no
+ * primary output and fall back to the first one, which need not be the
+ * primary monitor: nemo-desktop then puts the desktop icons, and X11 panels
+ * and games their windows, on another monitor. Xwayland names its outputs
+ * after the connectors, so match by name; a newly plugged output can reach
+ * Xwayland after monitors-changed, so retry for a little while.
+ */
+static Display *primary_output_xdisplay;
+static guint primary_output_retry_id;
+static int primary_output_retries;
+
+static gboolean
+set_xwayland_primary_output (void)
+{
+  MetaBackend *backend = meta_get_backend ();
+  MetaMonitorManager *monitor_manager =
+    meta_backend_get_monitor_manager (backend);
+  MetaLogicalMonitor *primary;
+  GList *monitors;
+  const char *connector;
+  XRRScreenResources *resources;
+  Window root;
+  gboolean found = FALSE;
+  int i;
+
+  if (!primary_output_xdisplay || !monitor_manager)
+    return TRUE;
+
+  primary = meta_monitor_manager_get_primary_logical_monitor (monitor_manager);
+  if (!primary)
+    return TRUE;
+
+  monitors = meta_logical_monitor_get_monitors (primary);
+  connector = monitors ? meta_monitor_get_connector (monitors->data) : NULL;
+  if (!connector)
+    return TRUE;
+
+  root = DefaultRootWindow (primary_output_xdisplay);
+  resources = XRRGetScreenResourcesCurrent (primary_output_xdisplay, root);
+  if (!resources)
+    return FALSE;
+
+  for (i = 0; i < resources->noutput && !found; i++)
+    {
+      RROutput output = resources->outputs[i];
+      XRROutputInfo *info;
+
+      info = XRRGetOutputInfo (primary_output_xdisplay, resources, output);
+      if (!info)
+        continue;
+
+      if (g_strcmp0 (info->name, connector) == 0)
+        {
+          if (XRRGetOutputPrimary (primary_output_xdisplay, root) != output)
+            XRRSetOutputPrimary (primary_output_xdisplay, root, output);
+          found = TRUE;
+        }
+
+      XRRFreeOutputInfo (info);
+    }
+
+  XRRFreeScreenResources (resources);
+  XFlush (primary_output_xdisplay);
+
+  return found;
+}
+
+static gboolean
+retry_xwayland_primary_output (gpointer user_data)
+{
+  if (set_xwayland_primary_output () || ++primary_output_retries >= 10)
+    {
+      primary_output_retry_id = 0;
+      return G_SOURCE_REMOVE;
+    }
+
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+update_xwayland_primary_output (void)
+{
+  g_clear_handle_id (&primary_output_retry_id, g_source_remove);
+  primary_output_retries = 0;
+
+  if (!set_xwayland_primary_output ())
+    primary_output_retry_id = g_timeout_add (200,
+                                             retry_xwayland_primary_output,
+                                             NULL);
+}
+
+static void
+on_monitors_changed (MetaMonitorManager *monitor_manager,
+                     gpointer            user_data)
+{
+  update_xwayland_primary_output ();
+}
+
 static void
 on_x11_display_closing (MetaDisplay *display)
 {
   Display *xdisplay = meta_x11_display_get_xdisplay (display->x11_display);
+  MetaMonitorManager *monitor_manager =
+    meta_backend_get_monitor_manager (meta_get_backend ());
+
+  g_signal_handlers_disconnect_by_func (monitor_manager,
+                                        on_monitors_changed,
+                                        NULL);
+  g_clear_handle_id (&primary_output_retry_id, g_source_remove);
+  primary_output_xdisplay = NULL;
 
   meta_xwayland_shutdown_dnd (xdisplay);
   g_signal_handlers_disconnect_by_func (display,
@@ -895,6 +1003,19 @@ meta_xwayland_complete_init (MetaDisplay *display,
                     G_CALLBACK (on_x11_display_closing), NULL);
   meta_xwayland_init_dnd (xdisplay);
   add_local_user_to_xhost (xdisplay);
+
+  {
+    int event_base, error_base;
+
+    if (XRRQueryExtension (xdisplay, &event_base, &error_base))
+      {
+        primary_output_xdisplay = xdisplay;
+        g_signal_connect (meta_backend_get_monitor_manager (meta_get_backend ()),
+                          "monitors-changed",
+                          G_CALLBACK (on_monitors_changed), NULL);
+        update_xwayland_primary_output ();
+      }
+  }
 
   if (meta_get_x11_display_policy () == META_DISPLAY_POLICY_ON_DEMAND)
     {
