@@ -82,6 +82,7 @@
  *         <underscanning>yes</underscanning>
  *         <rgbrange>full</rgbrange>
  *         <colorformat>rgb</colorformat>
+ *         <colormode>bt2100</colormode>
  *         <vrrmode>automatic</vrrmode>
  *       </monitor>
  *       <presentation>yes</presentation>
@@ -165,6 +166,7 @@ typedef enum
   STATE_MONITOR_UNDERSCANNING,
   STATE_MONITOR_RGB_RANGE,
   STATE_MONITOR_COLOR_FORMAT,
+  STATE_MONITOR_COLOR_MODE,
   STATE_MONITOR_VRR_MODE,
   STATE_DISABLED,
 } ParserState;
@@ -396,6 +398,10 @@ handle_start_element (GMarkupParseContext  *context,
           {
             parser->state = STATE_MONITOR_COLOR_FORMAT;
           }
+        else if (g_str_equal (element_name, "colormode"))
+          {
+            parser->state = STATE_MONITOR_COLOR_MODE;
+          }
         else if (g_str_equal (element_name, "vrrmode"))
           {
             parser->state = STATE_MONITOR_VRR_MODE;
@@ -489,6 +495,7 @@ handle_start_element (GMarkupParseContext  *context,
     case STATE_MONITOR_UNDERSCANNING:
     case STATE_MONITOR_RGB_RANGE:
     case STATE_MONITOR_COLOR_FORMAT:
+    case STATE_MONITOR_COLOR_MODE:
     case STATE_MONITOR_VRR_MODE:
       {
         g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
@@ -705,6 +712,7 @@ handle_end_element (GMarkupParseContext  *context,
 
     case STATE_MONITOR_RGB_RANGE:
     case STATE_MONITOR_COLOR_FORMAT:
+    case STATE_MONITOR_COLOR_MODE:
     case STATE_MONITOR_VRR_MODE:
       {
         parser->state = STATE_MONITOR;
@@ -918,6 +926,11 @@ static const char * const rgb_range_names[] = {
 
 static const char * const color_format_names[] = {
   NULL, "auto", "rgb", "ycbcr444", "ycbcr422", "ycbcr420",
+};
+
+/* Indexed by MetaOutputColorMode */
+static const char * const color_mode_names[] = {
+  "default", "bt2100",
 };
 
 /* Indexed by MetaOutputVrrMode */
@@ -1166,6 +1179,20 @@ handle_text (GMarkupParseContext *context,
         return;
       }
 
+    case STATE_MONITOR_COLOR_MODE:
+      {
+        int value = value_from_name (color_mode_names,
+                                     G_N_ELEMENTS (color_mode_names),
+                                     text, text_len);
+
+        if (value < 0)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid color mode %.*s", (int) text_len, text);
+        else
+          parser->current_monitor_config->color_mode = value;
+        return;
+      }
+
     case STATE_MONITOR_VRR_MODE:
       {
         int value = value_from_name (vrr_mode_names,
@@ -1322,6 +1349,10 @@ append_monitors (GString *buffer,
           monitor_config->rgb_range < G_N_ELEMENTS (rgb_range_names))
         g_string_append_printf (buffer, "        <rgbrange>%s</rgbrange>\n",
                                 rgb_range_names[monitor_config->rgb_range]);
+      if (monitor_config->color_mode > META_OUTPUT_COLOR_MODE_DEFAULT &&
+          monitor_config->color_mode < G_N_ELEMENTS (color_mode_names))
+        g_string_append_printf (buffer, "        <colormode>%s</colormode>\n",
+                                color_mode_names[monitor_config->color_mode]);
       if (monitor_config->vrr_mode > META_OUTPUT_VRR_MODE_OFF &&
           monitor_config->vrr_mode < G_N_ELEMENTS (vrr_mode_names))
         g_string_append_printf (buffer, "        <vrrmode>%s</vrrmode>\n",

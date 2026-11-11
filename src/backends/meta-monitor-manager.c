@@ -1790,6 +1790,27 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
                             meta_monitor_get_color_format (monitor),
                             meta_monitor_get_color_formats_for_mode (monitor,
                                                                      meta_monitor_get_current_mode (monitor)));
+      if (meta_monitor_get_supported_color_modes (monitor))
+        {
+          GVariantBuilder modes_builder;
+          unsigned int supported_modes =
+            meta_monitor_get_supported_color_modes (monitor);
+          uint32_t mode;
+
+          g_variant_builder_init (&modes_builder, G_VARIANT_TYPE ("au"));
+          for (mode = 0; mode <= META_OUTPUT_COLOR_MODE_LAST; mode++)
+            {
+              if (supported_modes & (1u << mode))
+                g_variant_builder_add (&modes_builder, "u", mode);
+            }
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "color-mode",
+                                 g_variant_new_uint32 (
+                                   meta_monitor_get_color_mode (monitor)));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "supported-color-modes",
+                                 g_variant_builder_end (&modes_builder));
+        }
 
       is_builtin = meta_monitor_is_laptop_panel (monitor);
       g_variant_builder_add (&monitor_properties_builder, "{sv}",
@@ -2146,6 +2167,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   gboolean set_underscanning = FALSE;
   uint32_t rgb_range;
   uint32_t color_format;
+  uint32_t color_mode;
   uint32_t vrr_mode;
 
   g_variant_get (monitor_config_variant, "(ss@a{sv})",
@@ -2222,6 +2244,20 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
         color_format = META_OUTPUT_COLOR_FORMAT_AUTO;
     }
 
+  if (g_variant_lookup (properties_variant, "color-mode", "u", &color_mode))
+    {
+      if (color_mode > META_OUTPUT_COLOR_MODE_LAST ||
+          !(meta_monitor_get_supported_color_modes (monitor) &
+            (1u << color_mode)))
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "Color mode %u requested but unsupported", color_mode);
+          return NULL;
+        }
+    }
+  else
+    {
+      color_mode = meta_monitor_get_color_mode (monitor);
   if (g_variant_lookup (properties_variant, "vrr-mode", "u", &vrr_mode))
     {
       if (vrr_mode > META_OUTPUT_VRR_MODE_LAST ||
@@ -2232,10 +2268,12 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
                        "VRR mode %u requested but unsupported", vrr_mode);
           return NULL;
         }
+    }
   else
     {
       vrr_mode = meta_monitor_get_vrr_mode (monitor);
     }
+
     }
 
   monitor_spec = meta_monitor_spec_clone (meta_monitor_get_spec (monitor));
@@ -2250,6 +2288,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
     .enable_underscanning = enable_underscanning,
     .rgb_range = rgb_range,
     .color_format = color_format,
+    .color_mode = color_mode,
     .vrr_mode = vrr_mode,
   };
 

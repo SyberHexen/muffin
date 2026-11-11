@@ -110,6 +110,8 @@ struct _MetaOutput
   unsigned int supported_rgb_ranges;
   MetaOutputColorFormat color_format;
   unsigned int supported_color_formats;
+  MetaOutputColorMode color_mode;
+  unsigned int supported_color_modes;
 
   /* Variable refresh rate: whether the sink can take it, and when to use it */
   gboolean vrr_capable;
