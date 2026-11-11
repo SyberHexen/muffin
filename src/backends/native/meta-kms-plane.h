@@ -42,6 +42,8 @@ MetaKmsDevice * meta_kms_plane_get_device (MetaKmsPlane *plane);
 
 uint32_t meta_kms_plane_get_id (MetaKmsPlane *plane);
 
+gboolean meta_kms_plane_is_fake (MetaKmsPlane *plane);
+
 MetaKmsPlaneType meta_kms_plane_get_plane_type (MetaKmsPlane *plane);
 
 gboolean meta_kms_plane_is_transform_handled (MetaKmsPlane         *plane,
