@@ -321,6 +321,17 @@
 	    - "is-underscanning" (b): whether underscanning is enabled
 				      (absence of this means underscanning
 				      not being supported)
+	    - "rgb-range" (u): the RGB quantization range sent to the
+			       monitor (KMS "Broadcast RGB"): 1 automatic,
+			       2 full, 3 limited (absence of this means it
+			       cannot be set)
+	    - "supported-rgb-ranges" (au): the values "rgb-range" accepts
+	    - "color-format" (u): the pixel encoding sent to the monitor
+				  (KMS "color format"): 1 automatic, 2 RGB,
+				  3 YCbCr 4:4:4, 4 YCbCr 4:2:2, 5 YCbCr 4:2:0
+				  (absence of this means it cannot be set)
+	    - "supported-color-formats" (au): the values "color-format"
+					      accepts
 	    - "max-screen-size" (ii): the maximum size a screen may have
 				      (absence of this means unlimited screen
 				      size)
@@ -440,6 +451,10 @@
 	        - "enable_underscanning" (b): enable monitor underscanning;
 					      may only be set when underscanning
 					      is supported (see GetCurrentState).
+	        - "rgb-range" (u): the RGB range (see GetCurrentState); when
+				   absent, the current one is kept.
+	        - "color-format" (u): the color format (see GetCurrentState);
+				      when absent, the current one is kept.
 
 	@properties may effect the global monitor configuration state. Possible
 	properties are:
