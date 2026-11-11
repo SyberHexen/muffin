@@ -93,6 +93,8 @@ struct _MetaOutputInfo
   gboolean     is_primary;
   gboolean     is_presentation;
   gboolean     is_underscanning;
+  MetaOutputRGBRange rgb_range;
+  MetaOutputColorFormat color_format;
   MetaOutputVrrMode vrr_mode;
 };
 
