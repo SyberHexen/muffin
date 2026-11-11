@@ -105,6 +105,12 @@ struct _MetaOutput
   gboolean is_underscanning;
   gboolean supports_underscanning;
 
+  /* Bit masks of (1 << value); 0 if the output has no such property */
+  MetaOutputRGBRange rgb_range;
+  unsigned int supported_rgb_ranges;
+  MetaOutputColorFormat color_format;
+  unsigned int supported_color_formats;
+
   /* Variable refresh rate: whether the sink can take it, and when to use it */
   gboolean vrr_capable;
   MetaOutputVrrMode vrr_mode;
