@@ -107,6 +107,17 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
                                         output->rgb_range);
     }
 
+  if (output->supported_color_modes & (1 << output->color_mode))
+    {
+      g_debug ("Setting color mode of connector %s to %d",
+               meta_kms_connector_get_name (output_kms->kms_connector),
+               output->color_mode);
+      meta_kms_connector_set_color_mode (output_kms->kms_connector,
+                                         kms_update,
+                                         meta_gpu_kms_get_fd (META_GPU_KMS (output->gpu)),
+                                         output->color_mode);
+    }
+
   if (output->supported_color_formats & (1 << output->color_format))
     {
       g_debug ("Setting color format of connector %s to %d",
@@ -430,6 +441,14 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
     output->color_format = old_output->color_format;
   else
     output->color_format = META_OUTPUT_COLOR_FORMAT_AUTO;
+
+  output->supported_color_modes =
+    meta_kms_connector_get_supported_color_modes (kms_connector);
+  if (old_output &&
+      (output->supported_color_modes & (1 << old_output->color_mode)))
+    output->color_mode = old_output->color_mode;
+  else
+    output->color_mode = META_OUTPUT_COLOR_MODE_DEFAULT;
 
   meta_output_parse_edid (output, connector_state->edid_data);
 
