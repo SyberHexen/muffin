@@ -370,6 +370,18 @@ meta_monitor_get_color_format (MetaMonitor *monitor)
                                          : META_OUTPUT_COLOR_FORMAT_UNKNOWN;
 }
 
+unsigned int
+meta_monitor_get_supported_color_modes (MetaMonitor *monitor)
+{
+  return meta_monitor_get_main_output (monitor)->supported_color_modes;
+}
+
+MetaOutputColorMode
+meta_monitor_get_color_mode (MetaMonitor *monitor)
+{
+  return meta_monitor_get_main_output (monitor)->color_mode;
+}
+
 gboolean
 meta_monitor_is_laptop_panel (MetaMonitor *monitor)
 {

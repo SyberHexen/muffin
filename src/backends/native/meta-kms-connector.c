@@ -54,6 +54,14 @@ struct _MetaKmsConnector
   uint32_t broadcast_rgb_prop_id;
   uint64_t broadcast_rgb_values[META_OUTPUT_RGB_RANGE_LAST + 1];
   unsigned int supported_rgb_ranges;
+  /* HDR: "Colorspace" (Default / BT2020_RGB) and "HDR_OUTPUT_METADATA" */
+  uint32_t colorspace_prop_id;
+  uint64_t colorspace_default_value;
+  uint64_t colorspace_bt2020_value;
+  gboolean have_colorspace_bt2020;
+  uint32_t hdr_metadata_prop_id;
+  uint32_t hdr_metadata_blob_id;
+
   uint32_t color_format_prop_id;
   uint64_t color_format_values[META_OUTPUT_COLOR_FORMAT_LAST + 1];
   unsigned int supported_color_formats;
@@ -142,7 +150,9 @@ meta_kms_connector_is_color_property (MetaKmsConnector *connector,
 {
   return prop_id &&
          (prop_id == connector->broadcast_rgb_prop_id ||
-          prop_id == connector->color_format_prop_id);
+          prop_id == connector->color_format_prop_id ||
+          prop_id == connector->colorspace_prop_id ||
+          prop_id == connector->hdr_metadata_prop_id);
 }
 
 /* Remember the current RGB range and color format of the connector as the
@@ -211,7 +221,113 @@ meta_kms_connector_restore_color_properties_in_impl (MetaKmsConnector *connector
       restored = TRUE;
     }
 
+  /* A refused HDR signal goes back to SDR either way */
+  if (connector->colorspace_prop_id)
+    {
+      drmModeObjectSetProperty (fd, connector->id, DRM_MODE_OBJECT_CONNECTOR,
+                                connector->colorspace_prop_id,
+                                connector->colorspace_default_value);
+      restored = TRUE;
+    }
+  if (connector->hdr_metadata_prop_id)
+    {
+      drmModeObjectSetProperty (fd, connector->id, DRM_MODE_OBJECT_CONNECTOR,
+                                connector->hdr_metadata_prop_id, 0);
+      restored = TRUE;
+    }
+
   return restored;
+}
+
+unsigned int
+meta_kms_connector_get_supported_color_modes (MetaKmsConnector *connector)
+{
+  if (!connector->colorspace_prop_id)
+    return 0;
+
+  if (connector->hdr_metadata_prop_id && connector->have_colorspace_bt2020)
+    return (1 << META_OUTPUT_COLOR_MODE_DEFAULT) |
+           (1 << META_OUTPUT_COLOR_MODE_BT2100);
+
+  return 1 << META_OUTPUT_COLOR_MODE_DEFAULT;
+}
+
+/* HDR10 static metadata.  Without content metadata, describe a 1000 nit
+ * BT.2020 mastering display, the most common HDR10 grading target. */
+static uint32_t
+ensure_hdr_metadata_blob (MetaKmsConnector *connector,
+                          int               fd)
+{
+  struct hdr_output_metadata metadata = { 0 };
+  struct hdr_metadata_infoframe *info = &metadata.hdmi_metadata_type1;
+  int ret;
+
+  if (connector->hdr_metadata_blob_id)
+    return connector->hdr_metadata_blob_id;
+
+  metadata.metadata_type = 0;           /* HDMI_STATIC_METADATA_TYPE1 */
+  info->eotf = 2;                       /* HDMI_EOTF_SMPTE_ST2084 */
+  info->metadata_type = 0;
+  /* chromaticities in units of 0.00002: BT.2020 red, green, blue, D65 */
+  info->display_primaries[0].x = 35400;
+  info->display_primaries[0].y = 14600;
+  info->display_primaries[1].x = 8500;
+  info->display_primaries[1].y = 39850;
+  info->display_primaries[2].x = 6550;
+  info->display_primaries[2].y = 2300;
+  info->white_point.x = 15635;
+  info->white_point.y = 16450;
+  info->max_display_mastering_luminance = 1000;   /* cd/m² */
+  info->min_display_mastering_luminance = 50;     /* 0.0001 cd/m² */
+  info->max_cll = 1000;
+  info->max_fall = 400;
+
+  ret = drmModeCreatePropertyBlob (fd, &metadata, sizeof (metadata),
+                                   &connector->hdr_metadata_blob_id);
+  if (ret != 0)
+    {
+      g_warning ("Failed to create HDR metadata for connector %s: %s",
+                 connector->name, g_strerror (-ret));
+      connector->hdr_metadata_blob_id = 0;
+    }
+
+  return connector->hdr_metadata_blob_id;
+}
+
+/* 'fd' is the device's fd: the HDR metadata blob is created on it */
+void
+meta_kms_connector_set_color_mode (MetaKmsConnector    *connector,
+                                   MetaKmsUpdate       *update,
+                                   int                  fd,
+                                   MetaOutputColorMode  color_mode)
+{
+  if (!(meta_kms_connector_get_supported_color_modes (connector) &
+        (1 << color_mode)))
+    return;
+
+  if (color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+    {
+      uint32_t blob_id = ensure_hdr_metadata_blob (connector, fd);
+
+      if (!blob_id)
+        return;
+      meta_kms_update_set_connector_property (update, connector,
+                                              connector->colorspace_prop_id,
+                                              connector->colorspace_bt2020_value);
+      meta_kms_update_set_connector_property (update, connector,
+                                              connector->hdr_metadata_prop_id,
+                                              blob_id);
+    }
+  else
+    {
+      meta_kms_update_set_connector_property (update, connector,
+                                              connector->colorspace_prop_id,
+                                              connector->colorspace_default_value);
+      if (connector->hdr_metadata_prop_id)
+        meta_kms_update_set_connector_property (update, connector,
+                                                connector->hdr_metadata_prop_id,
+                                                0);
+    }
 }
 
 unsigned int
@@ -823,6 +939,30 @@ find_property_ids (MetaKmsConnector  *connector,
               connector->broadcast_rgb_values[range] = prop->enums[j].value;
               connector->supported_rgb_ranges |= 1 << range;
             }
+        }
+      else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
+               strcmp (prop->name, "Colorspace") == 0)
+        {
+          int j;
+
+          connector->colorspace_prop_id = prop->prop_id;
+          for (j = 0; j < prop->count_enums; j++)
+            {
+              if (strcmp (prop->enums[j].name, "Default") == 0)
+                {
+                  connector->colorspace_default_value = prop->enums[j].value;
+                }
+              else if (strcmp (prop->enums[j].name, "BT2020_RGB") == 0)
+                {
+                  connector->colorspace_bt2020_value = prop->enums[j].value;
+                  connector->have_colorspace_bt2020 = TRUE;
+                }
+            }
+        }
+      else if ((prop->flags & DRM_MODE_PROP_BLOB) &&
+               strcmp (prop->name, "HDR_OUTPUT_METADATA") == 0)
+        {
+          connector->hdr_metadata_prop_id = prop->prop_id;
         }
       else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
                strcmp (prop->name, "color format") == 0)
