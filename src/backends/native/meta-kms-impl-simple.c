@@ -24,6 +24,8 @@
 
 #include <errno.h>
 #include <gbm.h>
+#include <drm_fourcc.h>
+#include <xf86drm.h>
 #include <xf86drmMode.h>
 
 #include "backends/native/meta-kms-connector.h"
@@ -55,6 +57,9 @@ struct _MetaKmsImplSimple
   GList *postponed_mode_set_fallback_datas;
 
   GHashTable *cached_mode_sets;
+
+  /* MetaKmsDevice -> AtomicDevice, for every device seen with a cursor */
+  GHashTable *atomic_devices;
 };
 
 G_DEFINE_TYPE (MetaKmsImplSimple, meta_kms_impl_simple,
@@ -62,6 +67,13 @@ G_DEFINE_TYPE (MetaKmsImplSimple, meta_kms_impl_simple,
 
 static void
 flush_postponed_page_flip_datas (MetaKmsImplSimple *impl_simple);
+
+static int
+atomic_page_flip (MetaKmsImplSimple   *impl_simple,
+                  MetaKmsDevice       *device,
+                  MetaKmsCrtc         *crtc,
+                  uint32_t             fb_id,
+                  MetaKmsPageFlipData *page_flip_data);
 
 MetaKmsImplSimple *
 meta_kms_impl_simple_new (MetaKms  *kms,
@@ -670,11 +682,15 @@ process_page_flip (MetaKmsImpl    *impl,
     }
   else
     {
-      ret = drmModePageFlip (fd,
-                             meta_kms_crtc_get_id (crtc),
-                             plane_assignment->fb_id,
-                             DRM_MODE_PAGE_FLIP_EVENT,
-                             meta_kms_page_flip_data_ref (page_flip_data));
+      ret = atomic_page_flip (impl_simple, device, crtc,
+                              plane_assignment ? plane_assignment->fb_id : 0,
+                              page_flip_data);
+      if (ret == -ENOTSUP)
+        ret = drmModePageFlip (fd,
+                               meta_kms_crtc_get_id (crtc),
+                               plane_assignment->fb_id,
+                               DRM_MODE_PAGE_FLIP_EVENT,
+                               meta_kms_page_flip_data_ref (page_flip_data));
     }
 
   if (ret != 0)
@@ -775,6 +791,499 @@ process_entries (MetaKmsImpl     *impl,
   return TRUE;
 }
 
+/*
+ * Atomic cursor updates.
+ *
+ * NVIDIA turns a commit that changes only the cursor image into a commit of
+ * every plane of the CRTC (a workaround in nvidia-drm-modeset.c), so each
+ * new cursor image costs a full flip.  Sent next to the page flips, as the
+ * legacy cursor ioctls are, every image change takes a frame from the
+ * monitor.
+ *
+ * On devices with slow cursor updates, keep the wanted cursor state per
+ * CRTC instead, and send it as part of the next page flip, which then
+ * becomes an atomic commit of the primary and cursor planes.  When the
+ * monitor is not flipping (an idle desktop with a moving pointer), send it
+ * in a non-blocking atomic commit of its own.  Page flips without a cursor
+ * change stay legacy.
+ *
+ * Unexpected errors turn this off for the device: the legacy cursor ioctls
+ * are used again, and the cursor renderer falls back to a software cursor.
+ * MUFFIN_DEBUG_ATOMIC_CURSOR=0 disables it.
+ */
+typedef struct _AtomicDevice AtomicDevice;
+
+typedef struct _AtomicCrtc
+{
+  AtomicDevice *adev;
+  MetaKmsCrtc *crtc;
+  uint32_t crtc_id;
+  gboolean usable;
+
+  uint32_t primary_plane_id;
+  uint32_t prop_primary_fb_id;
+
+  uint32_t plane_id;
+  uint32_t prop_fb_id;
+  uint32_t prop_crtc_id;
+  uint32_t prop_src_x;
+  uint32_t prop_src_y;
+  uint32_t prop_src_w;
+  uint32_t prop_src_h;
+  uint32_t prop_crtc_x;
+  uint32_t prop_crtc_y;
+  uint32_t prop_crtc_w;
+  uint32_t prop_crtc_h;
+
+  /* the wanted state */
+  gboolean dirty;
+  gboolean visible;
+  uint32_t fb_id;
+  int width;
+  int height;
+  int x;
+  int y;
+
+  uint32_t committed_fb_id;
+  int64_t last_flip_us;
+  guint source_id;
+} AtomicCrtc;
+
+struct _AtomicDevice
+{
+  MetaKmsDevice *device;
+  int fd;
+  gboolean disabled;
+  GHashTable *crtcs;            /* MetaKmsCrtc -> AtomicCrtc */
+};
+
+static void
+atomic_crtc_free (gpointer data)
+{
+  AtomicCrtc *ac = data;
+
+  g_clear_handle_id (&ac->source_id, g_source_remove);
+  if (ac->fb_id && ac->fb_id != ac->committed_fb_id)
+    drmModeRmFB (ac->adev->fd, ac->fb_id);
+  g_free (ac);
+}
+
+static void
+atomic_device_free (gpointer data)
+{
+  AtomicDevice *adev = data;
+
+  if (adev->crtcs)
+    g_hash_table_destroy (adev->crtcs);
+  g_free (adev);
+}
+
+static void
+atomic_device_disable (AtomicDevice *adev,
+                       const char   *what,
+                       int           ret)
+{
+  if (adev->disabled)
+    return;
+
+  g_warning ("Atomic cursor updates disabled: %s failed: %s",
+             what, g_strerror (-ret));
+  adev->disabled = TRUE;
+  /* The cursor renderer then falls back to a software cursor */
+  meta_kms_device_set_has_atomic_cursor_in_impl (adev->device, FALSE);
+}
+
+static AtomicDevice *
+get_atomic_device (MetaKmsImplSimple *impl_simple,
+                   MetaKmsDevice     *device,
+                   int                fd)
+{
+  AtomicDevice *adev;
+
+  adev = g_hash_table_lookup (impl_simple->atomic_devices, device);
+  if (adev)
+    return adev;
+
+  adev = g_new0 (AtomicDevice, 1);
+  adev->device = device;
+  adev->fd = fd;
+  adev->disabled =
+    g_strcmp0 (g_getenv ("MUFFIN_DEBUG_ATOMIC_CURSOR"), "0") == 0 ||
+    !meta_kms_device_has_slow_cursor_updates (device) ||
+    drmSetClientCap (fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0;
+  if (!adev->disabled)
+    {
+      adev->crtcs = g_hash_table_new_full (NULL, NULL, NULL, atomic_crtc_free);
+      g_message ("Using atomic cursor updates on %s",
+                 meta_kms_device_get_path (device));
+      meta_kms_device_set_has_atomic_cursor_in_impl (device, TRUE);
+    }
+  g_hash_table_insert (impl_simple->atomic_devices, device, adev);
+
+  return adev;
+}
+
+static uint32_t
+find_property (int         fd,
+               uint32_t    object_id,
+               uint32_t    object_type,
+               const char *name)
+{
+  drmModeObjectProperties *props;
+  uint32_t prop_id = 0;
+  uint32_t i;
+
+  props = drmModeObjectGetProperties (fd, object_id, object_type);
+  if (!props)
+    return 0;
+
+  for (i = 0; i < props->count_props && !prop_id; i++)
+    {
+      drmModePropertyRes *prop = drmModeGetProperty (fd, props->props[i]);
+
+      if (!prop)
+        continue;
+      if (strcmp (prop->name, name) == 0)
+        prop_id = prop->prop_id;
+      drmModeFreeProperty (prop);
+    }
+  drmModeFreeObjectProperties (props);
+
+  return prop_id;
+}
+
+static AtomicCrtc *
+get_atomic_crtc (AtomicDevice  *adev,
+                 MetaKmsDevice *device,
+                 MetaKmsCrtc   *crtc)
+{
+  AtomicCrtc *ac;
+  MetaKmsPlane *cursor_plane;
+  MetaKmsPlane *primary_plane;
+  int fd = adev->fd;
+
+  ac = g_hash_table_lookup (adev->crtcs, crtc);
+  if (ac)
+    return ac->usable ? ac : NULL;
+
+  ac = g_new0 (AtomicCrtc, 1);
+  ac->adev = adev;
+  ac->crtc = crtc;
+  ac->crtc_id = meta_kms_crtc_get_id (crtc);
+  g_hash_table_insert (adev->crtcs, crtc, ac);
+
+  cursor_plane = meta_kms_device_get_cursor_plane_for (device, crtc);
+  primary_plane = meta_kms_device_get_primary_plane_for (device, crtc);
+  if (!cursor_plane || meta_kms_plane_is_fake (cursor_plane) ||
+      !primary_plane || meta_kms_plane_is_fake (primary_plane))
+    return NULL;
+
+  ac->plane_id = meta_kms_plane_get_id (cursor_plane);
+  ac->primary_plane_id = meta_kms_plane_get_id (primary_plane);
+
+#define PLANE_PROP(field, id, name) \
+  ((ac->field = find_property (fd, id, DRM_MODE_OBJECT_PLANE, name)) != 0)
+
+  ac->usable =
+    PLANE_PROP (prop_primary_fb_id, ac->primary_plane_id, "FB_ID") &&
+    PLANE_PROP (prop_fb_id, ac->plane_id, "FB_ID") &&
+    PLANE_PROP (prop_crtc_id, ac->plane_id, "CRTC_ID") &&
+    PLANE_PROP (prop_src_x, ac->plane_id, "SRC_X") &&
+    PLANE_PROP (prop_src_y, ac->plane_id, "SRC_Y") &&
+    PLANE_PROP (prop_src_w, ac->plane_id, "SRC_W") &&
+    PLANE_PROP (prop_src_h, ac->plane_id, "SRC_H") &&
+    PLANE_PROP (prop_crtc_x, ac->plane_id, "CRTC_X") &&
+    PLANE_PROP (prop_crtc_y, ac->plane_id, "CRTC_Y") &&
+    PLANE_PROP (prop_crtc_w, ac->plane_id, "CRTC_W") &&
+    PLANE_PROP (prop_crtc_h, ac->plane_id, "CRTC_H");
+
+#undef PLANE_PROP
+
+  return ac->usable ? ac : NULL;
+}
+
+/* Take the cursor state of 'plane_assignment' as the wanted one */
+static gboolean
+atomic_crtc_set (AtomicCrtc             *ac,
+                 MetaKmsPlaneAssignment *plane_assignment)
+{
+  int fd = ac->adev->fd;
+
+  if (!(plane_assignment->flags & META_KMS_ASSIGN_PLANE_FLAG_FB_UNCHANGED))
+    {
+      uint32_t new_fb_id = 0;
+
+      if (plane_assignment->fb_id)
+        {
+          int width = meta_fixed_16_to_int (plane_assignment->dst_rect.width);
+          int height = meta_fixed_16_to_int (plane_assignment->dst_rect.height);
+          uint32_t handles[4] = { plane_assignment->fb_id };
+          uint32_t pitches[4] = { plane_assignment->cursor_buffer.stride };
+          uint32_t offsets[4] = { 0 };
+          uint32_t format = plane_assignment->cursor_buffer.format;
+          int ret;
+
+          if (!format)
+            format = DRM_FORMAT_ARGB8888;
+          if (!pitches[0])
+            pitches[0] = width * 4;
+
+          ret = drmModeAddFB2 (fd, width, height, format, handles, pitches,
+                               offsets, &new_fb_id, 0);
+          if (ret != 0)
+            {
+              atomic_device_disable (ac->adev, "drmModeAddFB2", ret);
+              return FALSE;
+            }
+          ac->width = width;
+          ac->height = height;
+        }
+
+      /* A wanted image that was never committed is not shown anywhere */
+      if (ac->fb_id && ac->fb_id != ac->committed_fb_id)
+        drmModeRmFB (fd, ac->fb_id);
+      ac->fb_id = new_fb_id;
+      ac->visible = new_fb_id != 0;
+    }
+
+  ac->x = meta_fixed_16_to_int (plane_assignment->dst_rect.x);
+  ac->y = meta_fixed_16_to_int (plane_assignment->dst_rect.y);
+  ac->dirty = TRUE;
+
+  return TRUE;
+}
+
+static gboolean
+add_atomic_cursor_properties (AtomicCrtc       *ac,
+                              drmModeAtomicReq *req)
+{
+  uint32_t plane = ac->plane_id;
+  gboolean ok = TRUE;
+
+#define ADD(prop, value) \
+  ok = ok && drmModeAtomicAddProperty (req, plane, ac->prop, value) >= 0
+
+  if (ac->visible)
+    {
+      ADD (prop_fb_id, ac->fb_id);
+      ADD (prop_crtc_id, ac->crtc_id);
+      ADD (prop_src_x, 0);
+      ADD (prop_src_y, 0);
+      ADD (prop_src_w, (uint64_t) ac->width << 16);
+      ADD (prop_src_h, (uint64_t) ac->height << 16);
+      ADD (prop_crtc_x, (uint64_t) (int64_t) ac->x);
+      ADD (prop_crtc_y, (uint64_t) (int64_t) ac->y);
+      ADD (prop_crtc_w, ac->width);
+      ADD (prop_crtc_h, ac->height);
+    }
+  else
+    {
+      ADD (prop_fb_id, 0);
+      ADD (prop_crtc_id, 0);
+    }
+
+#undef ADD
+
+  return ok;
+}
+
+/* The wanted state is now the committed one */
+static void
+atomic_crtc_committed (AtomicCrtc *ac)
+{
+  uint32_t fb_id = ac->visible ? ac->fb_id : 0;
+
+  /* The old framebuffer stays alive until the commit is done with it */
+  if (ac->committed_fb_id && ac->committed_fb_id != fb_id)
+    drmModeRmFB (ac->adev->fd, ac->committed_fb_id);
+  ac->committed_fb_id = fb_id;
+  ac->dirty = FALSE;
+}
+
+static int64_t
+atomic_crtc_frame_us (MetaKmsImplSimple *impl_simple,
+                      AtomicCrtc        *ac)
+{
+  CachedModeSet *cached_mode_set = get_cached_mode_set (impl_simple, ac->crtc);
+  float refresh_rate = 0;
+
+  if (cached_mode_set)
+    refresh_rate = meta_calculate_drm_mode_refresh_rate (cached_mode_set->drm_mode);
+
+  return refresh_rate > 1 ? (int64_t) (G_USEC_PER_SEC / refresh_rate) : 16667;
+}
+
+static void schedule_atomic_cursor_commit (MetaKmsImplSimple *impl_simple,
+                                           AtomicCrtc        *ac);
+
+typedef struct
+{
+  MetaKmsImplSimple *impl_simple;
+  AtomicCrtc *ac;
+} AtomicCommitData;
+
+static gboolean
+atomic_cursor_commit_timeout (gpointer user_data)
+{
+  AtomicCommitData *data = user_data;
+  AtomicCrtc *ac = data->ac;
+  drmModeAtomicReq *req;
+  int ret;
+
+  ac->source_id = 0;
+  if (!ac->dirty || ac->adev->disabled)
+    return G_SOURCE_REMOVE;
+
+  req = drmModeAtomicAlloc ();
+  if (!add_atomic_cursor_properties (ac, req))
+    {
+      drmModeAtomicFree (req);
+      atomic_device_disable (ac->adev, "drmModeAtomicAddProperty", -ENOMEM);
+      return G_SOURCE_REMOVE;
+    }
+  ret = drmModeAtomicCommit (ac->adev->fd, req, DRM_MODE_ATOMIC_NONBLOCK,
+                             NULL);
+  drmModeAtomicFree (req);
+
+  if (ret == 0)
+    {
+      atomic_crtc_committed (ac);
+    }
+  else if (ret == -EBUSY)
+    {
+      schedule_atomic_cursor_commit (data->impl_simple, ac);
+    }
+  else if (ret == -EINVAL)
+    {
+      /* For example a CRTC that is turned off: drop this state, the next
+       * cursor update or mode set brings a new one */
+      g_warning_once ("Atomic cursor commit on CRTC %u refused: %s",
+                      ac->crtc_id, g_strerror (-ret));
+      ac->dirty = FALSE;
+    }
+  else if (ret != -EACCES && ret != -EPERM)
+    {
+      atomic_device_disable (ac->adev, "cursor drmModeAtomicCommit", ret);
+    }
+
+  return G_SOURCE_REMOVE;
+}
+
+/*
+ * Send the wanted cursor state on its own, unless a page flip takes it
+ * first: right away when the CRTC is idle, after two frames when it is
+ * flipping (or busy), giving the flips a chance to carry it.
+ */
+static void
+schedule_atomic_cursor_commit (MetaKmsImplSimple *impl_simple,
+                               AtomicCrtc        *ac)
+{
+  int64_t frame_us = atomic_crtc_frame_us (impl_simple, ac);
+  int64_t now_us = g_get_monotonic_time ();
+  guint delay_ms = 0;
+  AtomicCommitData *data;
+
+  if (ac->source_id)
+    return;
+
+  if (ac->last_flip_us && now_us - ac->last_flip_us < 3 * frame_us)
+    delay_ms = (guint) (2 * frame_us / 1000);
+
+  data = g_new0 (AtomicCommitData, 1);
+  data->impl_simple = impl_simple;
+  data->ac = ac;
+  ac->source_id = g_timeout_add_full (G_PRIORITY_DEFAULT, delay_ms,
+                                      atomic_cursor_commit_timeout,
+                                      data, g_free);
+}
+
+/* The CRTC of 'device' with cursor state waiting to be sent, or NULL */
+static AtomicCrtc *
+get_dirty_atomic_crtc (MetaKmsImplSimple *impl_simple,
+                       MetaKmsDevice     *device,
+                       MetaKmsCrtc       *crtc)
+{
+  AtomicDevice *adev = g_hash_table_lookup (impl_simple->atomic_devices,
+                                            device);
+  AtomicCrtc *ac;
+
+  if (!adev || adev->disabled)
+    return NULL;
+  ac = g_hash_table_lookup (adev->crtcs, crtc);
+  return ac && ac->usable && ac->dirty ? ac : NULL;
+}
+
+/*
+ * Page flip 'crtc' to 'fb_id' together with its waiting cursor state, as
+ * drmModePageFlip() would.  Returns -ENOTSUP when there is nothing to send
+ * atomically, and turns atomic cursor updates off (also returning -ENOTSUP)
+ * when the commit is refused, so the caller can do a legacy page flip.
+ */
+static int
+atomic_page_flip (MetaKmsImplSimple   *impl_simple,
+                  MetaKmsDevice       *device,
+                  MetaKmsCrtc         *crtc,
+                  uint32_t             fb_id,
+                  MetaKmsPageFlipData *page_flip_data)
+{
+  AtomicCrtc *ac = get_dirty_atomic_crtc (impl_simple, device, crtc);
+  drmModeAtomicReq *req;
+  int ret;
+
+  if (!ac || !fb_id)
+    return -ENOTSUP;
+
+  req = drmModeAtomicAlloc ();
+  if (drmModeAtomicAddProperty (req, ac->primary_plane_id,
+                                ac->prop_primary_fb_id, fb_id) < 0 ||
+      !add_atomic_cursor_properties (ac, req))
+    {
+      drmModeAtomicFree (req);
+      return -ENOTSUP;
+    }
+
+  ret = drmModeAtomicCommit (ac->adev->fd, req,
+                             DRM_MODE_ATOMIC_NONBLOCK |
+                             DRM_MODE_PAGE_FLIP_EVENT,
+                             meta_kms_page_flip_data_ref (page_flip_data));
+  drmModeAtomicFree (req);
+
+  if (ret == 0)
+    {
+      atomic_crtc_committed (ac);
+      return 0;
+    }
+
+  /* Like drmModePageFlip(): on failure the caller drops the reference that
+   * went with the commit; on -ENOTSUP it does a legacy flip instead */
+  if (ret == -EBUSY || ret == -EACCES || ret == -EPERM)
+    return ret;
+
+  meta_kms_page_flip_data_unref (page_flip_data);
+  atomic_device_disable (ac->adev, "page flip drmModeAtomicCommit", ret);
+  return -ENOTSUP;
+}
+
+static void
+atomic_crtc_flipped (MetaKmsImplSimple *impl_simple,
+                     MetaKmsCrtc       *crtc)
+{
+  MetaKmsDevice *device = meta_kms_crtc_get_device (crtc);
+  AtomicDevice *adev = g_hash_table_lookup (impl_simple->atomic_devices,
+                                            device);
+  AtomicCrtc *ac;
+
+  if (!adev || adev->disabled)
+    return;
+  ac = g_hash_table_lookup (adev->crtcs, crtc);
+  if (!ac)
+    return;
+
+  ac->last_flip_us = g_get_monotonic_time ();
+  if (ac->dirty)
+    schedule_atomic_cursor_commit (impl_simple, ac);
+}
+
 static gboolean
 process_cursor_plane_assignment (MetaKmsImpl             *impl,
                                  MetaKmsUpdate           *update,
@@ -790,6 +1299,21 @@ process_cursor_plane_assignment (MetaKmsImpl             *impl,
   device = meta_kms_plane_get_device (plane);
   impl_device = meta_kms_device_get_impl_device (device);
   fd = meta_kms_impl_device_get_fd (impl_device);
+
+  {
+    AtomicDevice *adev = get_atomic_device (META_KMS_IMPL_SIMPLE (impl),
+                                            device, fd);
+    AtomicCrtc *ac = NULL;
+
+    if (!adev->disabled)
+      ac = get_atomic_crtc (adev, device, plane_assignment->crtc);
+    if (ac && atomic_crtc_set (ac, plane_assignment))
+      {
+        schedule_atomic_cursor_commit (META_KMS_IMPL_SIMPLE (impl), ac);
+        return TRUE;
+      }
+  }
+
 
   if (!(plane_assignment->flags & META_KMS_ASSIGN_PLANE_FLAG_FB_UNCHANGED))
     {
@@ -1012,6 +1536,9 @@ meta_kms_impl_simple_handle_page_flip_callback (MetaKmsImpl         *impl,
 {
   MetaKmsImplSimple *impl_simple = META_KMS_IMPL_SIMPLE (impl);
 
+  atomic_crtc_flipped (impl_simple,
+                       meta_kms_page_flip_data_get_crtc (page_flip_data));
+
   if (impl_simple->pending_page_flip_retries)
     {
       impl_simple->postponed_page_flip_datas =
@@ -1063,7 +1590,13 @@ static void
 meta_kms_impl_simple_notify_device_created (MetaKmsImpl   *impl,
                                             MetaKmsDevice *device)
 {
+  MetaKmsImplDevice *impl_device = meta_kms_device_get_impl_device (device);
   GList *l;
+
+  /* Decide on atomic cursor updates now: the cursor renderer only uses the
+   * hardware cursor of a device with slow cursor updates if they are atomic */
+  get_atomic_device (META_KMS_IMPL_SIMPLE (impl), device,
+                     meta_kms_impl_device_get_fd (impl_device));
 
   for (l = meta_kms_device_get_crtcs (device); l; l = l->next)
     {
@@ -1094,6 +1627,7 @@ meta_kms_impl_simple_finalize (GObject *object)
   g_clear_pointer (&impl_simple->mode_set_fallback_feedback_source,
                    g_source_destroy);
   g_hash_table_destroy (impl_simple->cached_mode_sets);
+  g_hash_table_destroy (impl_simple->atomic_devices);
 
   G_OBJECT_CLASS (meta_kms_impl_simple_parent_class)->finalize (object);
 }
@@ -1106,6 +1640,8 @@ meta_kms_impl_simple_init (MetaKmsImplSimple *impl_simple)
                            NULL,
                            NULL,
                            (GDestroyNotify) cached_mode_set_free);
+  impl_simple->atomic_devices =
+    g_hash_table_new_full (NULL, NULL, NULL, atomic_device_free);
 }
 
 static void

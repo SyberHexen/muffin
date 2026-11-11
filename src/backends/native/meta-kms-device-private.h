@@ -20,6 +20,8 @@
 #ifndef META_KMS_DEVICE_PRIVATE_H
 #define META_KMS_DEVICE_PRIVATE_H
 
+#include <glib.h>
+
 #include "backends/native/meta-kms-types.h"
 
 MetaKmsImplDevice * meta_kms_device_get_impl_device (MetaKmsDevice *device);
@@ -32,5 +34,8 @@ void meta_kms_device_predict_states_in_impl (MetaKmsDevice *device,
 void meta_kms_device_add_fake_plane_in_impl (MetaKmsDevice    *device,
                                              MetaKmsPlaneType  plane_type,
                                              MetaKmsCrtc      *crtc);
+
+void meta_kms_device_set_has_atomic_cursor_in_impl (MetaKmsDevice *device,
+                                                    gboolean       has_atomic_cursor);
 
 #endif /* META_KMS_DEVICE_PRIVATE_H */
