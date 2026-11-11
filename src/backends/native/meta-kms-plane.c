@@ -72,6 +72,12 @@ meta_kms_plane_get_device (MetaKmsPlane *plane)
   return plane->device;
 }
 
+gboolean
+meta_kms_plane_is_fake (MetaKmsPlane *plane)
+{
+  return plane->is_fake;
+}
+
 uint32_t
 meta_kms_plane_get_id (MetaKmsPlane *plane)
 {

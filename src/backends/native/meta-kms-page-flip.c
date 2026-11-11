@@ -82,6 +82,12 @@ meta_kms_page_flip_data_unref (MetaKmsPageFlipData *page_flip_data)
     }
 }
 
+MetaKmsCrtc *
+meta_kms_page_flip_data_get_crtc (MetaKmsPageFlipData *page_flip_data)
+{
+  return page_flip_data->crtc;
+}
+
 MetaKmsImpl *
 meta_kms_page_flip_data_get_kms_impl (MetaKmsPageFlipData *page_flip_data)
 {
