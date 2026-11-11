@@ -39,6 +39,8 @@ void meta_kms_page_flip_data_unref (MetaKmsPageFlipData *page_flip_data);
 
 MetaKmsImpl * meta_kms_page_flip_data_get_kms_impl (MetaKmsPageFlipData *page_flip_data);
 
+MetaKmsCrtc * meta_kms_page_flip_data_get_crtc (MetaKmsPageFlipData *page_flip_data);
+
 void meta_kms_page_flip_data_set_timings_in_impl (MetaKmsPageFlipData *page_flip_data,
                                                   unsigned int         sequence,
                                                   unsigned int         sec,
