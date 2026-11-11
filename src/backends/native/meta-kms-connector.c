@@ -58,6 +58,11 @@ struct _MetaKmsConnector
   uint64_t color_format_values[META_OUTPUT_COLOR_FORMAT_LAST + 1];
   unsigned int supported_color_formats;
 
+  /* the values of both after the last successful mode set */
+  gboolean have_good_color_properties;
+  uint64_t good_broadcast_rgb_value;
+  uint64_t good_color_format_value;
+
   uint32_t edid_blob_id;
   uint32_t tile_blob_id;
 };
@@ -129,6 +134,84 @@ meta_kms_connector_set_rgb_range (MetaKmsConnector   *connector,
                                           connector,
                                           connector->broadcast_rgb_prop_id,
                                           connector->broadcast_rgb_values[rgb_range]);
+}
+
+gboolean
+meta_kms_connector_is_color_property (MetaKmsConnector *connector,
+                                      uint32_t          prop_id)
+{
+  return prop_id &&
+         (prop_id == connector->broadcast_rgb_prop_id ||
+          prop_id == connector->color_format_prop_id);
+}
+
+/* Remember the current RGB range and color format of the connector as the
+ * last ones a mode set succeeded with */
+void
+meta_kms_connector_remember_color_properties_in_impl (MetaKmsConnector *connector,
+                                                      int               fd)
+{
+  drmModeObjectProperties *props;
+  gboolean have_rgb = !connector->broadcast_rgb_prop_id;
+  gboolean have_format = !connector->color_format_prop_id;
+  uint32_t i;
+
+  if (have_rgb && have_format)
+    return;
+
+  props = drmModeObjectGetProperties (fd, connector->id,
+                                      DRM_MODE_OBJECT_CONNECTOR);
+  if (!props)
+    return;
+
+  for (i = 0; i < props->count_props; i++)
+    {
+      if (props->props[i] == connector->broadcast_rgb_prop_id)
+        {
+          connector->good_broadcast_rgb_value = props->prop_values[i];
+          have_rgb = TRUE;
+        }
+      else if (props->props[i] == connector->color_format_prop_id)
+        {
+          connector->good_color_format_value = props->prop_values[i];
+          have_format = TRUE;
+        }
+    }
+  drmModeFreeObjectProperties (props);
+
+  connector->have_good_color_properties = have_rgb && have_format;
+}
+
+/* Set the RGB range and color format right away: to the ones of the last
+ * successful mode set, or with 'automatic' (or when there are none yet) to
+ * automatic.  Returns TRUE if the connector has either property. */
+gboolean
+meta_kms_connector_restore_color_properties_in_impl (MetaKmsConnector *connector,
+                                                     int               fd,
+                                                     gboolean          automatic)
+{
+  gboolean good = !automatic && connector->have_good_color_properties;
+  gboolean restored = FALSE;
+
+  if (connector->supported_rgb_ranges & (1 << META_OUTPUT_RGB_RANGE_AUTO))
+    {
+      drmModeObjectSetProperty (fd, connector->id, DRM_MODE_OBJECT_CONNECTOR,
+                                connector->broadcast_rgb_prop_id,
+                                good ? connector->good_broadcast_rgb_value :
+                                connector->broadcast_rgb_values[META_OUTPUT_RGB_RANGE_AUTO]);
+      restored = TRUE;
+    }
+
+  if (connector->supported_color_formats & (1 << META_OUTPUT_COLOR_FORMAT_AUTO))
+    {
+      drmModeObjectSetProperty (fd, connector->id, DRM_MODE_OBJECT_CONNECTOR,
+                                connector->color_format_prop_id,
+                                good ? connector->good_color_format_value :
+                                connector->color_format_values[META_OUTPUT_COLOR_FORMAT_AUTO]);
+      restored = TRUE;
+    }
+
+  return restored;
 }
 
 unsigned int
