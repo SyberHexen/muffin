@@ -127,6 +127,15 @@ gboolean meta_monitor_supports_underscanning (MetaMonitor *monitor);
 META_EXPORT_TEST
 gboolean meta_monitor_is_underscanning (MetaMonitor *monitor);
 
+/* Bit masks of (1 << value); 0 if the monitor has no such setting */
+unsigned int meta_monitor_get_supported_rgb_ranges (MetaMonitor *monitor);
+
+MetaOutputRGBRange meta_monitor_get_rgb_range (MetaMonitor *monitor);
+
+unsigned int meta_monitor_get_supported_color_formats (MetaMonitor *monitor);
+
+MetaOutputColorFormat meta_monitor_get_color_format (MetaMonitor *monitor);
+
 META_EXPORT_TEST
 gboolean meta_monitor_is_laptop_panel (MetaMonitor *monitor);
 

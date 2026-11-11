@@ -48,6 +48,16 @@ struct _MetaKmsConnector
   uint32_t underscan_prop_id;
   uint32_t underscan_hborder_prop_id;
   uint32_t underscan_vborder_prop_id;
+
+  /* "Broadcast RGB" and "color format": the KMS enum value for each
+   * MetaOutputRGBRange / MetaOutputColorFormat, and which ones exist */
+  uint32_t broadcast_rgb_prop_id;
+  uint64_t broadcast_rgb_values[META_OUTPUT_RGB_RANGE_LAST + 1];
+  unsigned int supported_rgb_ranges;
+  uint32_t color_format_prop_id;
+  uint64_t color_format_values[META_OUTPUT_COLOR_FORMAT_LAST + 1];
+  unsigned int supported_color_formats;
+
   uint32_t edid_blob_id;
   uint32_t tile_blob_id;
 };
@@ -99,6 +109,46 @@ meta_kms_connector_unset_underscanning (MetaKmsConnector *connector,
                                           connector,
                                           connector->underscan_prop_id,
                                           0);
+}
+
+unsigned int
+meta_kms_connector_get_supported_rgb_ranges (MetaKmsConnector *connector)
+{
+  return connector->supported_rgb_ranges;
+}
+
+void
+meta_kms_connector_set_rgb_range (MetaKmsConnector   *connector,
+                                  MetaKmsUpdate      *update,
+                                  MetaOutputRGBRange  rgb_range)
+{
+  if (!(connector->supported_rgb_ranges & (1 << rgb_range)))
+    return;
+
+  meta_kms_update_set_connector_property (update,
+                                          connector,
+                                          connector->broadcast_rgb_prop_id,
+                                          connector->broadcast_rgb_values[rgb_range]);
+}
+
+unsigned int
+meta_kms_connector_get_supported_color_formats (MetaKmsConnector *connector)
+{
+  return connector->supported_color_formats;
+}
+
+void
+meta_kms_connector_set_color_format (MetaKmsConnector      *connector,
+                                     MetaKmsUpdate         *update,
+                                     MetaOutputColorFormat  color_format)
+{
+  if (!(connector->supported_color_formats & (1 << color_format)))
+    return;
+
+  meta_kms_update_set_connector_property (update,
+                                          connector,
+                                          connector->color_format_prop_id,
+                                          connector->color_format_values[color_format]);
 }
 
 MetaConnectorType
@@ -610,6 +660,39 @@ meta_kms_connector_predict_state (MetaKmsConnector *connector,
     }
 }
 
+static MetaOutputRGBRange
+rgb_range_from_kms_name (const char *name)
+{
+  if (g_ascii_strcasecmp (name, "Automatic") == 0)
+    return META_OUTPUT_RGB_RANGE_AUTO;
+  else if (g_ascii_strcasecmp (name, "Full") == 0)
+    return META_OUTPUT_RGB_RANGE_FULL;
+  else if (g_ascii_strncasecmp (name, "Limited", strlen ("Limited")) == 0)
+    return META_OUTPUT_RGB_RANGE_LIMITED;
+  else
+    return META_OUTPUT_RGB_RANGE_UNKNOWN;
+}
+
+static MetaOutputColorFormat
+color_format_from_kms_name (const char *name)
+{
+  if (g_ascii_strcasecmp (name, "AUTO") == 0)
+    return META_OUTPUT_COLOR_FORMAT_AUTO;
+  else if (g_ascii_strcasecmp (name, "RGB") == 0)
+    return META_OUTPUT_COLOR_FORMAT_RGB;
+  else if (g_ascii_strcasecmp (name, "YUV 4:4:4") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr 4:4:4") == 0)
+    return META_OUTPUT_COLOR_FORMAT_YCBCR444;
+  else if (g_ascii_strcasecmp (name, "YUV 4:2:2") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr 4:2:2") == 0)
+    return META_OUTPUT_COLOR_FORMAT_YCBCR422;
+  else if (g_ascii_strcasecmp (name, "YUV 4:2:0") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr 4:2:0") == 0)
+    return META_OUTPUT_COLOR_FORMAT_YCBCR420;
+  else
+    return META_OUTPUT_COLOR_FORMAT_UNKNOWN;
+}
+
 static void
 find_property_ids (MetaKmsConnector  *connector,
                    MetaKmsImplDevice *impl_device,
@@ -640,6 +723,42 @@ find_property_ids (MetaKmsConnector  *connector,
       else if ((prop->flags & DRM_MODE_PROP_RANGE) &&
                strcmp (prop->name, "underscan vborder") == 0)
         connector->underscan_vborder_prop_id = prop->prop_id;
+      else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
+               strcmp (prop->name, "Broadcast RGB") == 0)
+        {
+          int j;
+
+          connector->broadcast_rgb_prop_id = prop->prop_id;
+          connector->supported_rgb_ranges = 0;
+          for (j = 0; j < prop->count_enums; j++)
+            {
+              MetaOutputRGBRange range =
+                rgb_range_from_kms_name (prop->enums[j].name);
+
+              if (range == META_OUTPUT_RGB_RANGE_UNKNOWN)
+                continue;
+              connector->broadcast_rgb_values[range] = prop->enums[j].value;
+              connector->supported_rgb_ranges |= 1 << range;
+            }
+        }
+      else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
+               strcmp (prop->name, "color format") == 0)
+        {
+          int j;
+
+          connector->color_format_prop_id = prop->prop_id;
+          connector->supported_color_formats = 0;
+          for (j = 0; j < prop->count_enums; j++)
+            {
+              MetaOutputColorFormat format =
+                color_format_from_kms_name (prop->enums[j].name);
+
+              if (format == META_OUTPUT_COLOR_FORMAT_UNKNOWN)
+                continue;
+              connector->color_format_values[format] = prop->enums[j].value;
+              connector->supported_color_formats |= 1 << format;
+            }
+        }
 
       drmModeFreeProperty (prop);
     }

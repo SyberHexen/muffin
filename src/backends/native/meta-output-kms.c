@@ -91,6 +91,33 @@ meta_output_kms_set_underscan (MetaOutput    *output,
     }
 }
 
+void
+meta_output_kms_set_color_properties (MetaOutput    *output,
+                                      MetaKmsUpdate *kms_update)
+{
+  MetaOutputKms *output_kms = output->driver_private;
+
+  if (output->supported_rgb_ranges & (1 << output->rgb_range))
+    {
+      g_debug ("Setting RGB range of connector %s to %d",
+               meta_kms_connector_get_name (output_kms->kms_connector),
+               output->rgb_range);
+      meta_kms_connector_set_rgb_range (output_kms->kms_connector,
+                                        kms_update,
+                                        output->rgb_range);
+    }
+
+  if (output->supported_color_formats & (1 << output->color_format))
+    {
+      g_debug ("Setting color format of connector %s to %d",
+               meta_kms_connector_get_name (output_kms->kms_connector),
+               output->color_format);
+      meta_kms_connector_set_color_format (output_kms->kms_connector,
+                                           kms_update,
+                                           output->color_format);
+    }
+}
+
 uint32_t
 meta_output_kms_get_connector_id (MetaOutput *output)
 {
@@ -388,6 +415,21 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
   output->hotplug_mode_update = connector_state->hotplug_mode_update;
   output->supports_underscanning =
     meta_kms_connector_is_underscanning_supported (kms_connector);
+
+  output->supported_rgb_ranges =
+    meta_kms_connector_get_supported_rgb_ranges (kms_connector);
+  output->supported_color_formats =
+    meta_kms_connector_get_supported_color_formats (kms_connector);
+  if (old_output &&
+      (output->supported_rgb_ranges & (1 << old_output->rgb_range)))
+    output->rgb_range = old_output->rgb_range;
+  else
+    output->rgb_range = META_OUTPUT_RGB_RANGE_AUTO;
+  if (old_output &&
+      (output->supported_color_formats & (1 << old_output->color_format)))
+    output->color_format = old_output->color_format;
+  else
+    output->color_format = META_OUTPUT_COLOR_FORMAT_AUTO;
 
   meta_output_parse_edid (output, connector_state->edid_data);
 
