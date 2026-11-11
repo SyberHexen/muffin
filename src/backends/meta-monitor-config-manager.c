@@ -306,7 +306,13 @@ assign_monitor_crtc (MetaMonitor         *monitor,
     .output = output,
     .is_primary = assign_output_as_primary,
     .is_presentation = assign_output_as_presentation,
-    .is_underscanning = data->monitor_config->enable_underscanning
+    .is_underscanning = data->monitor_config->enable_underscanning,
+    .rgb_range = data->monitor_config->rgb_range != META_OUTPUT_RGB_RANGE_UNKNOWN
+                 ? data->monitor_config->rgb_range
+                 : META_OUTPUT_RGB_RANGE_AUTO,
+    .color_format = data->monitor_config->color_format != META_OUTPUT_COLOR_FORMAT_UNKNOWN
+                    ? data->monitor_config->color_format
+                    : META_OUTPUT_COLOR_FORMAT_AUTO,
   };
 
   g_ptr_array_add (data->crtc_infos, crtc_info);
@@ -663,7 +669,9 @@ create_monitor_config (MetaMonitor     *monitor,
   *monitor_config = (MetaMonitorConfig) {
     .monitor_spec = meta_monitor_spec_clone (monitor_spec),
     .mode_spec = g_memdup2 (mode_spec, sizeof (MetaMonitorModeSpec)),
-    .enable_underscanning = meta_monitor_is_underscanning (monitor)
+    .enable_underscanning = meta_monitor_is_underscanning (monitor),
+    .rgb_range = meta_monitor_get_rgb_range (monitor),
+    .color_format = meta_monitor_get_color_format (monitor),
   };
 
   return monitor_config;
@@ -1176,7 +1184,9 @@ clone_monitor_config_list (GList *monitor_configs_in)
         .monitor_spec = meta_monitor_spec_clone (monitor_config_in->monitor_spec),
         .mode_spec = g_memdup2 (monitor_config_in->mode_spec,
                                 sizeof (MetaMonitorModeSpec)),
-        .enable_underscanning = monitor_config_in->enable_underscanning
+        .enable_underscanning = monitor_config_in->enable_underscanning,
+        .rgb_range = monitor_config_in->rgb_range,
+        .color_format = monitor_config_in->color_format,
       };
       monitor_configs_out =
         g_list_append (monitor_configs_out, monitor_config_out);

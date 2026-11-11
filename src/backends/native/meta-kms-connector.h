@@ -73,6 +73,18 @@ void meta_kms_connector_set_underscanning (MetaKmsConnector *connector,
 void meta_kms_connector_unset_underscanning (MetaKmsConnector *connector,
                                              MetaKmsUpdate    *update);
 
+unsigned int meta_kms_connector_get_supported_rgb_ranges (MetaKmsConnector *connector);
+
+void meta_kms_connector_set_rgb_range (MetaKmsConnector   *connector,
+                                       MetaKmsUpdate      *update,
+                                       MetaOutputRGBRange  rgb_range);
+
+unsigned int meta_kms_connector_get_supported_color_formats (MetaKmsConnector *connector);
+
+void meta_kms_connector_set_color_format (MetaKmsConnector      *connector,
+                                          MetaKmsUpdate         *update,
+                                          MetaOutputColorFormat  color_format);
+
 MetaConnectorType meta_kms_connector_get_connector_type (MetaKmsConnector *connector);
 
 uint32_t meta_kms_connector_get_id (MetaKmsConnector *connector);

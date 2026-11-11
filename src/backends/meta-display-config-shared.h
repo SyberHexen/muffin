@@ -36,4 +36,34 @@ typedef enum
   META_POWER_SAVE_OFF,
 } MetaPowerSave;
 
+/*
+ * The quantization range of RGB output ("Broadcast RGB" in KMS).  The values
+ * are the ones of the "rgb-range" property of the DisplayConfig interface.
+ */
+typedef enum
+{
+  META_OUTPUT_RGB_RANGE_UNKNOWN = 0,
+  META_OUTPUT_RGB_RANGE_AUTO = 1,
+  META_OUTPUT_RGB_RANGE_FULL = 2,
+  META_OUTPUT_RGB_RANGE_LIMITED = 3,
+} MetaOutputRGBRange;
+
+#define META_OUTPUT_RGB_RANGE_LAST META_OUTPUT_RGB_RANGE_LIMITED
+
+/*
+ * The pixel encoding sent over the link ("color format" in KMS).  The values
+ * are the ones of the "color-format" property of the DisplayConfig interface.
+ */
+typedef enum
+{
+  META_OUTPUT_COLOR_FORMAT_UNKNOWN = 0,
+  META_OUTPUT_COLOR_FORMAT_AUTO = 1,
+  META_OUTPUT_COLOR_FORMAT_RGB = 2,
+  META_OUTPUT_COLOR_FORMAT_YCBCR444 = 3,
+  META_OUTPUT_COLOR_FORMAT_YCBCR422 = 4,
+  META_OUTPUT_COLOR_FORMAT_YCBCR420 = 5,
+} MetaOutputColorFormat;
+
+#define META_OUTPUT_COLOR_FORMAT_LAST META_OUTPUT_COLOR_FORMAT_YCBCR420
+
 #endif /* META_DISPLAY_CONFIG_SHARED_H */
