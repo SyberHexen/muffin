@@ -313,6 +313,7 @@ assign_monitor_crtc (MetaMonitor         *monitor,
     .color_format = data->monitor_config->color_format != META_OUTPUT_COLOR_FORMAT_UNKNOWN
                     ? data->monitor_config->color_format
                     : META_OUTPUT_COLOR_FORMAT_AUTO,
+    .color_mode = data->monitor_config->color_mode,
   };
 
   g_ptr_array_add (data->crtc_infos, crtc_info);
@@ -672,6 +673,7 @@ create_monitor_config (MetaMonitor     *monitor,
     .enable_underscanning = meta_monitor_is_underscanning (monitor),
     .rgb_range = meta_monitor_get_rgb_range (monitor),
     .color_format = meta_monitor_get_color_format (monitor),
+    .color_mode = meta_monitor_get_color_mode (monitor),
   };
 
   return monitor_config;
@@ -1187,6 +1189,7 @@ clone_monitor_config_list (GList *monitor_configs_in)
         .enable_underscanning = monitor_config_in->enable_underscanning,
         .rgb_range = monitor_config_in->rgb_range,
         .color_format = monitor_config_in->color_format,
+        .color_mode = monitor_config_in->color_mode,
       };
       monitor_configs_out =
         g_list_append (monitor_configs_out, monitor_config_out);

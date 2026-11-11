@@ -79,6 +79,13 @@ void meta_kms_connector_set_rgb_range (MetaKmsConnector   *connector,
                                        MetaKmsUpdate      *update,
                                        MetaOutputRGBRange  rgb_range);
 
+unsigned int meta_kms_connector_get_supported_color_modes (MetaKmsConnector *connector);
+
+void meta_kms_connector_set_color_mode (MetaKmsConnector    *connector,
+                                        MetaKmsUpdate       *update,
+                                        int                  fd,
+                                        MetaOutputColorMode  color_mode);
+
 unsigned int meta_kms_connector_get_supported_color_formats (MetaKmsConnector *connector);
 
 gboolean meta_kms_connector_is_color_property (MetaKmsConnector *connector,
