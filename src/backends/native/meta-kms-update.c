@@ -341,6 +341,15 @@ meta_kms_plane_assignment_set_plane_property (MetaKmsPlaneAssignment *plane_assi
 }
 
 void
+meta_kms_plane_assignment_set_cursor_buffer (MetaKmsPlaneAssignment *plane_assignment,
+                                             uint32_t                format,
+                                             uint32_t                stride)
+{
+  plane_assignment->cursor_buffer.format = format;
+  plane_assignment->cursor_buffer.stride = stride;
+}
+
+void
 meta_kms_plane_assignment_set_cursor_hotspot (MetaKmsPlaneAssignment *plane_assignment,
                                               int                     x,
                                               int                     y)

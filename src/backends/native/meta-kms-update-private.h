@@ -57,6 +57,13 @@ typedef struct _MetaKmsPlaneAssignment
     int x;
     int y;
   } cursor_hotspot;
+
+  /* Cursor planes pass a GEM handle as fb_id; a framebuffer made from it
+   * (for atomic commits) needs the buffer's layout. 0 if unknown. */
+  struct {
+    uint32_t format;
+    uint32_t stride;
+  } cursor_buffer;
 } MetaKmsPlaneAssignment;
 
 typedef struct _MetaKmsModeSet
