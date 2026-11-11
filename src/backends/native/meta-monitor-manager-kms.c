@@ -239,6 +239,10 @@ apply_crtc_assignments (MetaMonitorManager *manager,
       output->is_primary = output_info->is_primary;
       output->is_presentation = output_info->is_presentation;
       output->is_underscanning = output_info->is_underscanning;
+      if (output->supported_rgb_ranges & (1 << output_info->rgb_range))
+        output->rgb_range = output_info->rgb_range;
+      if (output->supported_color_formats & (1 << output_info->color_format))
+        output->color_format = output_info->color_format;
     }
 
   /* Disable outputs not mentioned in the list */

@@ -105,6 +105,12 @@ struct _MetaOutput
   gboolean is_underscanning;
   gboolean supports_underscanning;
 
+  /* Bit masks of (1 << value); 0 if the output has no such property */
+  MetaOutputRGBRange rgb_range;
+  unsigned int supported_rgb_ranges;
+  MetaOutputColorFormat color_format;
+  unsigned int supported_color_formats;
+
   gpointer driver_private;
   GDestroyNotify driver_notify;
 

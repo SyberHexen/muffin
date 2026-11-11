@@ -34,6 +34,8 @@ typedef struct _MetaMonitorConfig
   MetaMonitorSpec *monitor_spec;
   MetaMonitorModeSpec *mode_spec;
   gboolean enable_underscanning;
+  MetaOutputRGBRange rgb_range;          /* UNKNOWN: not set */
+  MetaOutputColorFormat color_format;    /* UNKNOWN: not set */
 } MetaMonitorConfig;
 
 typedef struct _MetaLogicalMonitorConfig

@@ -80,6 +80,8 @@
  *           <rate>60.049972534179688</rate>
  *         </mode>
  *         <underscanning>yes</underscanning>
+ *         <rgbrange>full</rgbrange>
+ *         <colorformat>rgb</colorformat>
  *       </monitor>
  *       <presentation>yes</presentation>
  *     </logicalmonitor>
@@ -160,6 +162,8 @@ typedef enum
   STATE_MONITOR_MODE_RATE,
   STATE_MONITOR_MODE_FLAG,
   STATE_MONITOR_UNDERSCANNING,
+  STATE_MONITOR_RGB_RANGE,
+  STATE_MONITOR_COLOR_FORMAT,
   STATE_DISABLED,
 } ParserState;
 
@@ -382,6 +386,14 @@ handle_start_element (GMarkupParseContext  *context,
           {
             parser->state = STATE_MONITOR_UNDERSCANNING;
           }
+        else if (g_str_equal (element_name, "rgbrange"))
+          {
+            parser->state = STATE_MONITOR_RGB_RANGE;
+          }
+        else if (g_str_equal (element_name, "colorformat"))
+          {
+            parser->state = STATE_MONITOR_COLOR_FORMAT;
+          }
         else
           {
             g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
@@ -469,9 +481,12 @@ handle_start_element (GMarkupParseContext  *context,
       }
 
     case STATE_MONITOR_UNDERSCANNING:
+    case STATE_MONITOR_RGB_RANGE:
+    case STATE_MONITOR_COLOR_FORMAT:
       {
         g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
-                     "Invalid element '%s' under underscanning", element_name);
+                     "Invalid element '%s' under a monitor setting",
+                     element_name);
         return;
       }
 
@@ -681,6 +696,13 @@ handle_end_element (GMarkupParseContext  *context,
         return;
       }
 
+    case STATE_MONITOR_RGB_RANGE:
+    case STATE_MONITOR_COLOR_FORMAT:
+      {
+        parser->state = STATE_MONITOR;
+        return;
+      }
+
     case STATE_MONITOR:
       {
         MetaLogicalMonitorConfig *logical_monitor_config;
@@ -879,6 +901,33 @@ read_float (const char  *text,
       *out_value = value;
       return TRUE;
     }
+}
+
+/* Indexed by MetaOutputRGBRange / MetaOutputColorFormat */
+static const char * const rgb_range_names[] = {
+  NULL, "auto", "full", "limited",
+};
+
+static const char * const color_format_names[] = {
+  NULL, "auto", "rgb", "ycbcr444", "ycbcr422", "ycbcr420",
+};
+
+static int
+value_from_name (const char * const *names,
+                 int                 n_names,
+                 const char         *text,
+                 gsize               text_len)
+{
+  g_autofree char *str = g_strstrip (g_strndup (text, text_len));
+  int i;
+
+  for (i = 0; i < n_names; i++)
+    {
+      if (names[i] && g_str_equal (names[i], str))
+        return i;
+    }
+
+  return -1;
 }
 
 static gboolean
@@ -1089,6 +1138,34 @@ handle_text (GMarkupParseContext *context,
                    error);
         return;
       }
+
+    case STATE_MONITOR_RGB_RANGE:
+      {
+        int value = value_from_name (rgb_range_names,
+                                     G_N_ELEMENTS (rgb_range_names),
+                                     text, text_len);
+
+        if (value < 0)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid RGB range %.*s", (int) text_len, text);
+        else
+          parser->current_monitor_config->rgb_range = value;
+        return;
+      }
+
+    case STATE_MONITOR_COLOR_FORMAT:
+      {
+        int value = value_from_name (color_format_names,
+                                     G_N_ELEMENTS (color_format_names),
+                                     text, text_len);
+
+        if (value < 0)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid color format %.*s", (int) text_len, text);
+        else
+          parser->current_monitor_config->color_format = value;
+        return;
+      }
     }
 }
 
@@ -1214,6 +1291,14 @@ append_monitors (GString *buffer,
       g_string_append (buffer, "        </mode>\n");
       if (monitor_config->enable_underscanning)
         g_string_append (buffer, "        <underscanning>yes</underscanning>\n");
+      if (monitor_config->rgb_range > META_OUTPUT_RGB_RANGE_AUTO &&
+          monitor_config->rgb_range < G_N_ELEMENTS (rgb_range_names))
+        g_string_append_printf (buffer, "        <rgbrange>%s</rgbrange>\n",
+                                rgb_range_names[monitor_config->rgb_range]);
+      if (monitor_config->color_format > META_OUTPUT_COLOR_FORMAT_AUTO &&
+          monitor_config->color_format < G_N_ELEMENTS (color_format_names))
+        g_string_append_printf (buffer, "        <colorformat>%s</colorformat>\n",
+                                color_format_names[monitor_config->color_format]);
       g_string_append (buffer, "      </monitor>\n");
     }
 }

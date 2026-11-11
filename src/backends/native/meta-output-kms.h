@@ -31,6 +31,9 @@ void meta_output_kms_set_power_save_mode (MetaOutput    *output,
                                           uint64_t       dpms_state,
                                           MetaKmsUpdate *kms_update);
 
+void meta_output_kms_set_color_properties (MetaOutput    *output,
+                                           MetaKmsUpdate *kms_update);
+
 void meta_output_kms_set_underscan (MetaOutput    *output,
                                     MetaKmsUpdate *kms_update);
 

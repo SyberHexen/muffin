@@ -340,6 +340,36 @@ meta_monitor_is_underscanning (MetaMonitor *monitor)
   return output->is_underscanning;
 }
 
+unsigned int
+meta_monitor_get_supported_rgb_ranges (MetaMonitor *monitor)
+{
+  return meta_monitor_get_main_output (monitor)->supported_rgb_ranges;
+}
+
+MetaOutputRGBRange
+meta_monitor_get_rgb_range (MetaMonitor *monitor)
+{
+  MetaOutput *output = meta_monitor_get_main_output (monitor);
+
+  return output->supported_rgb_ranges ? output->rgb_range
+                                      : META_OUTPUT_RGB_RANGE_UNKNOWN;
+}
+
+unsigned int
+meta_monitor_get_supported_color_formats (MetaMonitor *monitor)
+{
+  return meta_monitor_get_main_output (monitor)->supported_color_formats;
+}
+
+MetaOutputColorFormat
+meta_monitor_get_color_format (MetaMonitor *monitor)
+{
+  MetaOutput *output = meta_monitor_get_main_output (monitor);
+
+  return output->supported_color_formats ? output->color_format
+                                         : META_OUTPUT_COLOR_FORMAT_UNKNOWN;
+}
+
 gboolean
 meta_monitor_is_laptop_panel (MetaMonitor *monitor)
 {
