@@ -243,6 +243,8 @@ apply_crtc_assignments (MetaMonitorManager *manager,
         output->rgb_range = output_info->rgb_range;
       if (output->supported_color_formats & (1 << output_info->color_format))
         output->color_format = output_info->color_format;
+      if (output->supported_color_modes & (1 << output_info->color_mode))
+        output->color_mode = output_info->color_mode;
       output->vrr_mode = output->vrr_capable ? output_info->vrr_mode
                                              : META_OUTPUT_VRR_MODE_OFF;
     }

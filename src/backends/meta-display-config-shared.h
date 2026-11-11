@@ -67,6 +67,20 @@ typedef enum
 #define META_OUTPUT_COLOR_FORMAT_LAST META_OUTPUT_COLOR_FORMAT_YCBCR420
 
 /*
+ * The signal sent to the monitor.  BT2100 is HDR10: BT.2020 primaries and
+ * the PQ (SMPTE ST 2084) transfer function, with HDR static metadata.  The
+ * values are the ones of the "color-mode" property of the DisplayConfig
+ * interface, as in Mutter.
+ */
+typedef enum
+{
+  META_OUTPUT_COLOR_MODE_DEFAULT = 0,
+  META_OUTPUT_COLOR_MODE_BT2100 = 1,
+} MetaOutputColorMode;
+
+#define META_OUTPUT_COLOR_MODE_LAST META_OUTPUT_COLOR_MODE_BT2100
+
+/*
  * Variable refresh rate. The values are the ones of the "vrr-mode" property
  * of the DisplayConfig interface.
  */
