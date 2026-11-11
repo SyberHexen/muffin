@@ -92,7 +92,27 @@ process_connector_property (MetaKmsImpl    *impl,
                                   DRM_MODE_OBJECT_CONNECTOR,
                                   connector_property->prop_id,
                                   connector_property->value);
-  if (ret != 0)
+  if (ret != 0 &&
+      meta_kms_connector_is_color_property (connector,
+                                            connector_property->prop_id))
+    {
+      /*
+       * amdgpu checks the whole display configuration when one of these
+       * changes, and refuses a color format the mode cannot be sent in
+       * (such as YCbCr 4:2:0 for a mode without 4:2:0 support).  Failing
+       * the update for it leaves the outputs without a mode; keep the last
+       * working settings instead.
+       */
+      g_warning ("Connector %s refused color setting %u (%s); keeping the "
+                 "last working color format and RGB range",
+                 meta_kms_connector_get_name (connector),
+                 (unsigned int) connector_property->value,
+                 g_strerror (-ret));
+      meta_kms_connector_restore_color_properties_in_impl (connector, fd,
+                                                           FALSE);
+      return TRUE;
+    }
+  else if (ret != 0)
     {
       g_set_error (error, G_IO_ERROR, g_io_error_from_errno (-ret),
                    "Failed to set connector %u property %u: %s",
@@ -932,6 +952,47 @@ generate_all_failed_feedbacks (MetaKmsUpdate *update)
   return failed_planes;
 }
 
+typedef enum
+{
+  COLOR_PROPERTIES_REMEMBER,
+  COLOR_PROPERTIES_RESTORE_GOOD,
+  COLOR_PROPERTIES_RESTORE_AUTOMATIC,
+} ColorPropertiesOp;
+
+/* Apply 'op' to the connectors of the mode sets of 'update'.  For the
+ * restores, returns TRUE if any connector has the properties. */
+static gboolean
+mode_set_color_properties (MetaKmsUpdate     *update,
+                           ColorPropertiesOp  op)
+{
+  gboolean found = FALSE;
+  GList *l, *k;
+
+  for (l = meta_kms_update_get_mode_sets (update); l; l = l->next)
+    {
+      MetaKmsModeSet *mode_set = l->data;
+
+      for (k = mode_set->connectors; k; k = k->next)
+        {
+          MetaKmsConnector *connector = k->data;
+          MetaKmsDevice *device = meta_kms_connector_get_device (connector);
+          MetaKmsImplDevice *impl_device =
+            meta_kms_device_get_impl_device (device);
+          int fd = meta_kms_impl_device_get_fd (impl_device);
+
+          if (op == COLOR_PROPERTIES_REMEMBER)
+            meta_kms_connector_remember_color_properties_in_impl (connector,
+                                                                  fd);
+          else if (meta_kms_connector_restore_color_properties_in_impl (
+                     connector, fd,
+                     op == COLOR_PROPERTIES_RESTORE_AUTOMATIC))
+            found = TRUE;
+        }
+    }
+
+  return found;
+}
+
 static MetaKmsFeedback *
 meta_kms_impl_simple_process_update (MetaKmsImpl   *impl,
                                      MetaKmsUpdate *update)
@@ -954,7 +1015,42 @@ meta_kms_impl_simple_process_update (MetaKmsImpl   *impl,
                         meta_kms_update_get_mode_sets (update),
                         process_mode_set,
                         &error))
-    goto err_planes_not_assigned;
+    {
+      /*
+       * A color format or RGB range the sink cannot take with the mode (such
+       * as YCbCr 4:2:0 for a mode without 4:2:0 support) makes the driver
+       * refuse the mode set.  Rather than failing the whole update, which
+       * leaves the outputs without a mode, retry with the RGB range and
+       * color format of the last successful mode set, then with both on
+       * automatic.
+       */
+      if (!mode_set_color_properties (update, COLOR_PROPERTIES_RESTORE_GOOD))
+        goto err_planes_not_assigned;
+
+      g_warning ("%s; retrying with the last working color format and "
+                 "RGB range", error->message);
+      g_clear_error (&error);
+      if (!process_entries (impl,
+                            update,
+                            meta_kms_update_get_mode_sets (update),
+                            process_mode_set,
+                            &error))
+        {
+          mode_set_color_properties (update,
+                                     COLOR_PROPERTIES_RESTORE_AUTOMATIC);
+          g_warning ("%s; retrying with automatic color format and RGB "
+                     "range", error->message);
+          g_clear_error (&error);
+          if (!process_entries (impl,
+                                update,
+                                meta_kms_update_get_mode_sets (update),
+                                process_mode_set,
+                                &error))
+            goto err_planes_not_assigned;
+        }
+    }
+
+  mode_set_color_properties (update, COLOR_PROPERTIES_REMEMBER);
 
   if (!process_entries (impl,
                         update,
