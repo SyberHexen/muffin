@@ -95,6 +95,7 @@ struct _MetaOutputInfo
   gboolean     is_underscanning;
   MetaOutputRGBRange rgb_range;
   MetaOutputColorFormat color_format;
+  MetaOutputColorMode color_mode;
 };
 
 #define META_TYPE_MONITOR_MANAGER            (meta_monitor_manager_get_type ())

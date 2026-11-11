@@ -332,6 +332,11 @@
 				  (absence of this means it cannot be set)
 	    - "supported-color-formats" (au): the values "color-format"
 					      accepts
+	    - "color-mode" (u): the signal sent to the monitor: 0 default,
+				1 BT.2100 (HDR10: BT.2020 primaries, PQ transfer
+				function and HDR metadata) (absence of this means
+				it cannot be set)
+	    - "supported-color-modes" (au): the values "color-mode" accepts
 	    - "max-screen-size" (ii): the maximum size a screen may have
 				      (absence of this means unlimited screen
 				      size)
@@ -455,6 +460,8 @@
 				   absent, the current one is kept.
 	        - "color-format" (u): the color format (see GetCurrentState);
 				      when absent, the current one is kept.
+	        - "color-mode" (u): the color mode (see GetCurrentState); when
+				    absent, the current one is kept.
 
 	@properties may effect the global monitor configuration state. Possible
 	properties are:
