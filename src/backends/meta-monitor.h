@@ -136,6 +136,10 @@ unsigned int meta_monitor_get_supported_color_formats (MetaMonitor *monitor);
 
 MetaOutputColorFormat meta_monitor_get_color_format (MetaMonitor *monitor);
 
+unsigned int meta_monitor_get_supported_color_modes (MetaMonitor *monitor);
+
+MetaOutputColorMode meta_monitor_get_color_mode (MetaMonitor *monitor);
+
 META_EXPORT_TEST
 gboolean meta_monitor_is_laptop_panel (MetaMonitor *monitor);
 
