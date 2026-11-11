@@ -101,6 +101,7 @@ typedef struct _MetaCursorRendererNativeGpuData
 {
   gboolean hw_cursor_broken;
   gboolean has_slow_cursor_updates;
+  MetaKmsDevice *kms_device;
 
   uint64_t cursor_width;
   uint64_t cursor_height;
@@ -189,7 +190,9 @@ is_hw_cursor_usable (MetaCursorRendererNativeGpuData *cursor_renderer_gpu_data)
   if (cursor_renderer_gpu_data->hw_cursor_broken)
     return FALSE;
 
+  /* Slow cursor updates are fine when they go out with the page flips */
   if (cursor_renderer_gpu_data->has_slow_cursor_updates &&
+      !meta_kms_device_has_atomic_cursor (cursor_renderer_gpu_data->kms_device) &&
       !meta_settings_is_experimental_feature_string_enabled (
          settings, FORCE_HW_CURSOR_FEATURE))
     return FALSE;
@@ -350,6 +353,10 @@ set_crtc_cursor (MetaCursorRendererNative *native,
                                                    src_rect,
                                                    dst_rect,
                                                    flags);
+
+  meta_kms_plane_assignment_set_cursor_buffer (plane_assignment,
+                                               gbm_bo_get_format (bo),
+                                               gbm_bo_get_stride (bo));
 
   calculate_crtc_cursor_hotspot (cursor_sprite,
                                  &cursor_hotspot_x,
@@ -1852,8 +1859,15 @@ init_hw_cursor_support_for_gpu (MetaGpuKms *gpu_kms)
   cursor_renderer_gpu_data->cursor_height = height;
   cursor_renderer_gpu_data->has_slow_cursor_updates =
     meta_kms_device_has_slow_cursor_updates (kms_device);
+  cursor_renderer_gpu_data->kms_device = kms_device;
 
-  if (cursor_renderer_gpu_data->has_slow_cursor_updates)
+  if (cursor_renderer_gpu_data->has_slow_cursor_updates &&
+      meta_kms_device_has_atomic_cursor (kms_device))
+    {
+      g_message ("Hardware cursor on %s uses atomic commits",
+                 meta_kms_device_get_path (kms_device));
+    }
+  else if (cursor_renderer_gpu_data->has_slow_cursor_updates)
     {
       g_message ("Hardware cursor disabled on %s: muffin's hw cursor doesn't currently behave well during "
                  "image updates. Add '%s' to org.cinnamon.muffin "

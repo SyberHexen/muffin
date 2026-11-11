@@ -43,6 +43,7 @@ struct _MetaKmsDevice
   MetaKmsDeviceFlag flags;
   char *path;
   gboolean has_slow_cursor_updates;
+  gboolean has_atomic_cursor;
 
   GList *crtcs;
   GList *connectors;
@@ -308,6 +309,21 @@ gboolean
 meta_kms_device_has_slow_cursor_updates (MetaKmsDevice *device)
 {
   return device->has_slow_cursor_updates;
+}
+
+/* Cursor updates of a device with slow ones are sent in atomic commits,
+ * with the page flips, which makes them cheap (see meta-kms-impl-simple.c) */
+gboolean
+meta_kms_device_has_atomic_cursor (MetaKmsDevice *device)
+{
+  return device->has_atomic_cursor;
+}
+
+void
+meta_kms_device_set_has_atomic_cursor_in_impl (MetaKmsDevice *device,
+                                               gboolean       has_atomic_cursor)
+{
+  device->has_atomic_cursor = has_atomic_cursor;
 }
 
 static char *
