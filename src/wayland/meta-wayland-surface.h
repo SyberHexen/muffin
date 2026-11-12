@@ -142,6 +142,10 @@ struct _MetaWaylandSurfaceState
   int viewport_dst_width;
   int viewport_dst_height;
 
+  /* wp_color_management_surface_v1; a NULL description unsets it */
+  gboolean has_new_color_description;
+  MetaWaylandColorDescription *color_description;
+
   GSList *subsurface_placement_ops;
 };
 
@@ -249,6 +253,16 @@ struct _MetaWaylandSurface
     /* The view whose timing they report; only compared, never used */
     ClutterStageView *main_view;
   } presentation_time;
+
+  /* wp_color_management_v1 */
+  struct {
+    struct wl_resource *resource;
+    GList *feedback_resources;
+    /* What the content is, as last committed; NULL if not described */
+    MetaWaylandColorDescription *description;
+    /* Last preferred description announced to the feedback objects */
+    uint64_t preferred_id;
+  } color_management;
 
   /* Buffer renderer state. */
   gboolean buffer_held;

@@ -34,6 +34,7 @@
 #include "wayland/meta-wayland-buffer.h"
 #include "wayland/meta-wayland-activation.h"
 #include "wayland/meta-wayland-cursor-shape.h"
+#include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-wayland-fractional-scale.h"
 #include "wayland/meta-wayland-commit-timing.h"
 #include "wayland/meta-wayland-fifo.h"
@@ -612,6 +613,7 @@ meta_wayland_compositor_setup (MetaWaylandCompositor *wayland_compositor)
   meta_wayland_drm_init (compositor);
   meta_wayland_init_single_pixel_buffer_manager (compositor);
   meta_wayland_init_fractional_scale (compositor);
+  meta_wayland_init_color_management (compositor);
   meta_wayland_init_linux_drm_syncobj (compositor);
   meta_wayland_init_presentation_time (compositor);
   meta_wayland_init_fifo (compositor);
