@@ -35,6 +35,7 @@
 #include "backends/meta-monitor.h"
 #include "backends/meta-monitor-manager-private.h"
 #include "backends/meta-output.h"
+#include "core/window-private.h"
 #include "wayland/meta-wayland-outputs.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-wayland-surface.h"
@@ -1201,6 +1202,191 @@ on_monitors_changed (MetaMonitorManager *monitor_manager,
     }
 }
 
+/* HDR passthrough */
+
+/* Delays before switching, so a mode switch (which blanks the monitor) is not
+ * started by a window only briefly fullscreen, or undone while the views are
+ * rebuilt for the previous switch */
+#define PASSTHROUGH_ON_DELAY_MS 300
+#define PASSTHROUGH_OFF_DELAY_MS 1500
+
+typedef struct
+{
+  gboolean enabled;
+  /* connector -> whether a fullscreen window there shows HDR10 */
+  GHashTable *wanted;
+  /* Connectors Muffin switched to BT.2100 itself, and so may switch back */
+  GHashTable *switched;
+  /* Connectors where switching failed; not retried until wanted again */
+  GHashTable *refused;
+  guint timeout_id;
+} Passthrough;
+
+static Passthrough passthrough;
+
+static gboolean
+surface_tree_is_hdr10 (MetaWaylandSurface *surface)
+{
+  MetaWaylandSurface *subsurface;
+
+  if (meta_wayland_color_description_is_hdr10 (surface->color_management.description))
+    return TRUE;
+
+  META_WAYLAND_SURFACE_FOREACH_SUBSURFACE (surface, subsurface)
+    {
+      if (surface_tree_is_hdr10 (subsurface))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static gboolean
+monitor_supports_bt2100 (MetaMonitor *monitor)
+{
+  return (meta_monitor_get_supported_color_modes (monitor) &
+          (1u << META_OUTPUT_COLOR_MODE_BT2100)) != 0;
+}
+
+static MetaMonitorManager *
+get_monitor_manager (void)
+{
+  return meta_backend_get_monitor_manager (meta_get_backend ());
+}
+
+static gboolean
+apply_passthrough (gpointer user_data)
+{
+  MetaMonitorManager *monitor_manager = get_monitor_manager ();
+  g_autoptr (GList) keys = NULL;
+  GList *connectors, *l;
+
+  passthrough.timeout_id = 0;
+
+  /* Applying a configuration can re-enter through monitors-changed */
+  keys = g_hash_table_get_keys (passthrough.wanted);
+  connectors = g_list_copy_deep (keys, (GCopyFunc) g_strdup, NULL);
+
+  for (l = connectors; l; l = l->next)
+    {
+      const char *connector = l->data;
+      g_autoptr (GError) error = NULL;
+      MetaMonitor *monitor;
+      MetaOutputColorMode current, target;
+      gboolean wanted;
+
+      if (!g_hash_table_lookup_extended (passthrough.wanted, connector,
+                                         NULL, (gpointer *) &wanted))
+        continue;
+
+      monitor = meta_monitor_manager_get_monitor_from_connector (monitor_manager,
+                                                                 connector);
+      if (!monitor)
+        continue;
+
+      current = meta_monitor_get_color_mode (monitor);
+
+      /* Switched back by someone else: no longer ours to undo */
+      if (current == META_OUTPUT_COLOR_MODE_DEFAULT)
+        g_hash_table_remove (passthrough.switched, connector);
+
+      if (wanted && current == META_OUTPUT_COLOR_MODE_DEFAULT &&
+          !g_hash_table_contains (passthrough.refused, connector))
+        target = META_OUTPUT_COLOR_MODE_BT2100;
+      else if (!wanted && current == META_OUTPUT_COLOR_MODE_BT2100 &&
+               g_hash_table_contains (passthrough.switched, connector))
+        target = META_OUTPUT_COLOR_MODE_DEFAULT;
+      else
+        continue;
+
+      g_message ("HDR passthrough: switching %s to %s", connector,
+                 target == META_OUTPUT_COLOR_MODE_BT2100 ?
+                 "BT.2100 for a fullscreen HDR10 window" : "SDR");
+
+      if (!meta_monitor_manager_set_monitor_color_mode (monitor_manager,
+                                                        monitor, target,
+                                                        &error))
+        {
+          g_warning ("HDR passthrough: could not switch %s: %s",
+                     connector, error->message);
+          if (target == META_OUTPUT_COLOR_MODE_BT2100)
+            g_hash_table_add (passthrough.refused, g_strdup (connector));
+          continue;
+        }
+
+      if (target == META_OUTPUT_COLOR_MODE_BT2100)
+        g_hash_table_add (passthrough.switched, g_strdup (connector));
+      else
+        g_hash_table_remove (passthrough.switched, connector);
+    }
+
+  g_list_free_full (connectors, g_free);
+
+  return G_SOURCE_REMOVE;
+}
+
+void
+meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows)
+{
+  MetaMonitorManager *monitor_manager;
+  GList *logical_monitors, *l, *k;
+  gboolean switch_on = FALSE, switch_off = FALSE;
+
+  if (!passthrough.enabled)
+    return;
+
+  monitor_manager = get_monitor_manager ();
+  g_hash_table_remove_all (passthrough.wanted);
+
+  logical_monitors =
+    meta_monitor_manager_get_logical_monitors (monitor_manager);
+  for (l = logical_monitors; l; l = l->next)
+    {
+      MetaLogicalMonitor *logical_monitor = l->data;
+      MetaWindow *window = g_hash_table_lookup (fullscreen_windows,
+                                                logical_monitor);
+      gboolean wanted;
+
+      wanted = window && window->surface &&
+               surface_tree_is_hdr10 (window->surface);
+
+      for (k = meta_logical_monitor_get_monitors (logical_monitor); k; k = k->next)
+        {
+          MetaMonitor *monitor = k->data;
+          const char *connector = meta_monitor_get_connector (monitor);
+          MetaOutputColorMode current;
+
+          if (!monitor_supports_bt2100 (monitor))
+            continue;
+
+          g_hash_table_insert (passthrough.wanted, g_strdup (connector),
+                               GINT_TO_POINTER (wanted));
+          if (!wanted)
+            g_hash_table_remove (passthrough.refused, connector);
+
+          current = meta_monitor_get_color_mode (monitor);
+          if (wanted && current == META_OUTPUT_COLOR_MODE_DEFAULT &&
+              !g_hash_table_contains (passthrough.refused, connector))
+            switch_on = TRUE;
+          else if (!wanted && current == META_OUTPUT_COLOR_MODE_BT2100 &&
+                   g_hash_table_contains (passthrough.switched, connector))
+            switch_off = TRUE;
+        }
+    }
+
+  g_clear_handle_id (&passthrough.timeout_id, g_source_remove);
+
+  if (switch_on || switch_off)
+    {
+      passthrough.timeout_id =
+        g_timeout_add (switch_on ? PASSTHROUGH_ON_DELAY_MS :
+                                   PASSTHROUGH_OFF_DELAY_MS,
+                       apply_passthrough, NULL);
+      g_source_set_name_by_id (passthrough.timeout_id,
+                               "[muffin] HDR passthrough");
+    }
+}
+
 void
 meta_wayland_init_color_management (MetaWaylandCompositor *compositor)
 {
@@ -1231,6 +1417,14 @@ meta_wayland_init_color_management (MetaWaylandCompositor *compositor)
   color_manager->hdr10_output->target_max_lum = 1000.0;
   color_manager->hdr10_output->max_cll = 1000;
   color_manager->hdr10_output->max_fall = 400;
+
+  passthrough.enabled = !g_getenv ("MUFFIN_DEBUG_DISABLE_HDR_PASSTHROUGH");
+  passthrough.wanted = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                              g_free, NULL);
+  passthrough.switched = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                g_free, NULL);
+  passthrough.refused = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                               g_free, NULL);
 
   /* After the wl_outputs, which are updated on the same signal */
   g_signal_connect (monitor_manager, "monitors-changed-internal",
