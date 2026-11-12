@@ -59,6 +59,7 @@ typedef struct _MetaWaylandSurface MetaWaylandSurface;
 typedef struct _MetaWaylandSurfaceState MetaWaylandSurfaceState;
 
 typedef struct _MetaWaylandOutput MetaWaylandOutput;
+typedef struct _MetaWaylandColorDescription MetaWaylandColorDescription;
 
 typedef struct _MetaWaylandWindowConfiguration MetaWaylandWindowConfiguration;
 
