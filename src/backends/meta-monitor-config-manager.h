@@ -117,6 +117,11 @@ MetaMonitorsConfig * meta_monitor_config_manager_create_for_layout (MetaMonitorC
                                                                     MetaMonitorsConfig           *config,
                                                                     MetaLogicalMonitorLayoutMode  layout_mode);
 
+/* The current configuration with @monitor in @color_mode */
+MetaMonitorsConfig * meta_monitor_config_manager_create_for_color_mode (MetaMonitorConfigManager *config_manager,
+                                                                        MetaMonitor              *monitor,
+                                                                        MetaOutputColorMode       color_mode);
+
 META_EXPORT_TEST
 MetaMonitorsConfig * meta_monitor_config_manager_create_for_switch_config (MetaMonitorConfigManager    *config_manager,
                                                                            MetaMonitorSwitchConfigType  config_type);

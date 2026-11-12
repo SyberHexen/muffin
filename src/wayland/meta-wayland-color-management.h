@@ -38,6 +38,11 @@ gboolean meta_wayland_color_description_is_hdr10 (MetaWaylandColorDescription *d
 /* Re-evaluate the preferred image description after the surface moved */
 void meta_wayland_color_management_update_surface (MetaWaylandSurface *surface);
 
+/* Switch outputs to the BT.2100 color mode while a fullscreen window on them
+ * shows HDR10 content, and back afterwards. @fullscreen_windows maps each
+ * logical monitor in fullscreen to its window. */
+void meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows);
+
 /* Drop the color management objects of a surface being destroyed */
 void meta_wayland_color_management_surface_destroyed (MetaWaylandSurface *surface);
 
