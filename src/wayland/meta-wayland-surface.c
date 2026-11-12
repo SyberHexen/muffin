@@ -43,6 +43,7 @@
 #include "wayland/meta-wayland-actor-surface.h"
 #include "wayland/meta-wayland-buffer.h"
 #include "wayland/meta-wayland-data-device.h"
+#include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-wayland-fractional-scale.h"
 #include "wayland/meta-wayland-gtk-shell.h"
 #include "wayland/meta-wayland-layer-shell.h"
@@ -493,6 +494,9 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   state->has_new_viewport_src_rect = FALSE;
   state->has_new_viewport_dst_size = FALSE;
 
+  state->has_new_color_description = FALSE;
+  state->color_description = NULL;
+
   state->subsurface_placement_ops = NULL;
 }
 
@@ -505,6 +509,8 @@ meta_wayland_surface_state_clear (MetaWaylandSurfaceState *state)
   g_clear_pointer (&state->buffer_damage, cairo_region_destroy);
   g_clear_pointer (&state->input_region, cairo_region_destroy);
   g_clear_pointer (&state->opaque_region, cairo_region_destroy);
+  g_clear_pointer (&state->color_description,
+                   meta_wayland_color_description_unref);
 
   if (state->buffer)
     g_clear_signal_handler (&state->buffer_destroy_handler_id, state->buffer);
@@ -624,6 +630,14 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
       to->viewport_dst_width = from->viewport_dst_width;
       to->viewport_dst_height = from->viewport_dst_height;
       to->has_new_viewport_dst_size = TRUE;
+    }
+
+  if (from->has_new_color_description)
+    {
+      g_clear_pointer (&to->color_description,
+                       meta_wayland_color_description_unref);
+      to->color_description = g_steal_pointer (&from->color_description);
+      to->has_new_color_description = TRUE;
     }
 
   if (to->buffer && to->buffer_destroy_handler_id == 0)
@@ -787,6 +801,14 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
       surface->viewport.dst_width = state->viewport_dst_width;
       surface->viewport.dst_height = state->viewport_dst_height;
       surface->viewport.has_dst_size = surface->viewport.dst_width > 0;
+    }
+
+  if (state->has_new_color_description)
+    {
+      g_clear_pointer (&surface->color_management.description,
+                       meta_wayland_color_description_unref);
+      surface->color_management.description =
+        g_steal_pointer (&state->color_description);
     }
 
   if (!cairo_region_is_empty (state->surface_damage) ||
@@ -1556,6 +1578,7 @@ meta_wayland_surface_update_outputs (MetaWaylandSurface *surface)
                         surface);
 
   maybe_send_preferred_scale (surface);
+  meta_wayland_color_management_update_surface (surface);
 }
 
 void
@@ -1583,6 +1606,8 @@ wl_surface_destructor (struct wl_resource *resource)
   MetaWaylandFrameCallback *cb, *next;
 
   g_signal_emit (surface, surface_signals[SURFACE_DESTROY], 0);
+
+  meta_wayland_color_management_surface_destroyed (surface);
 
   g_clear_object (&surface->scanout_candidate);
   g_clear_object (&surface->role);
