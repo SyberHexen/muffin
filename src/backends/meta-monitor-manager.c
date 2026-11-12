@@ -3705,6 +3705,35 @@ meta_monitor_manager_rotate_monitor (MetaMonitorManager *manager)
   g_object_unref (config);
 }
 
+/*
+ * Switches @monitor to @color_mode with a temporary configuration, so the
+ * stored one is not touched.
+ */
+gboolean
+meta_monitor_manager_set_monitor_color_mode (MetaMonitorManager   *manager,
+                                             MetaMonitor          *monitor,
+                                             MetaOutputColorMode   color_mode,
+                                             GError              **error)
+{
+  g_autoptr (MetaMonitorsConfig) config = NULL;
+
+  config =
+    meta_monitor_config_manager_create_for_color_mode (manager->config_manager,
+                                                       monitor, color_mode);
+  if (!config)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                   "%s is not in the current configuration",
+                   meta_monitor_get_connector (monitor));
+      return FALSE;
+    }
+
+  return meta_monitor_manager_apply_monitors_config (manager,
+                                                     config,
+                                                     META_MONITORS_CONFIG_METHOD_TEMPORARY,
+                                                     error);
+}
+
 static void
 apply_switch_config (MetaMonitorManager          *manager,
                      MetaMonitorsConfig          *config,
