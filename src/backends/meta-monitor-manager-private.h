@@ -402,6 +402,11 @@ MetaMonitorConfigManager *
 
 void meta_monitor_manager_rotate_monitor (MetaMonitorManager *manager);
 
+gboolean meta_monitor_manager_set_monitor_color_mode (MetaMonitorManager   *manager,
+                                                      MetaMonitor          *monitor,
+                                                      MetaOutputColorMode   color_mode,
+                                                      GError              **error);
+
 void meta_monitor_manager_clear_output (MetaOutput *output);
 void meta_monitor_manager_clear_mode (MetaCrtcMode *mode);
 void meta_monitor_manager_clear_crtc (MetaCrtc *crtc);
