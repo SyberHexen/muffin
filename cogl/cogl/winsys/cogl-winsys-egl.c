@@ -303,6 +303,24 @@ cleanup_context (CoglDisplay *display)
     egl_renderer->platform_vtable->cleanup_context (display);
 }
 
+#ifndef EGL_NO_CONFIG_KHR
+#define EGL_NO_CONFIG_KHR ((EGLConfig) 0)
+#endif
+
+static gboolean
+has_egl_extension (EGLDisplay  edpy,
+                   const char *name)
+{
+  const char *extensions = eglQueryString (edpy, EGL_EXTENSIONS);
+  g_auto (GStrv) split = NULL;
+
+  if (!extensions)
+    return FALSE;
+
+  split = g_strsplit (extensions, " ", 0);
+  return g_strv_contains ((const char * const *) split, name);
+}
+
 static gboolean
 try_create_context (CoglDisplay *display,
                     GError **error)
@@ -380,10 +398,23 @@ try_create_context (CoglDisplay *display,
 
   attribs[i++] = EGL_NONE;
 
-  egl_display->egl_context = eglCreateContext (edpy,
-                                               config,
-                                               EGL_NO_CONTEXT,
-                                               attribs);
+  /* Without a config, the context can render to surfaces of any config:
+   * HDR outputs need 10-bit surfaces next to the 8-bit ones */
+  egl_display->egl_context_no_config =
+    has_egl_extension (edpy, "EGL_KHR_no_config_context");
+  egl_display->egl_context =
+    eglCreateContext (edpy,
+                      egl_display->egl_context_no_config ? EGL_NO_CONFIG_KHR
+                                                         : config,
+                      EGL_NO_CONTEXT,
+                      attribs);
+  if (egl_display->egl_context == EGL_NO_CONTEXT &&
+      egl_display->egl_context_no_config)
+    {
+      egl_display->egl_context_no_config = FALSE;
+      egl_display->egl_context = eglCreateContext (edpy, config,
+                                                   EGL_NO_CONTEXT, attribs);
+    }
 
   if (egl_display->egl_context == EGL_NO_CONTEXT)
     {
