@@ -149,6 +149,9 @@ typedef struct _CoglDisplayEGL
 
   EGLConfig egl_config;
   gboolean found_egl_config;
+  /* The context was created with EGL_NO_CONFIG_KHR, so surfaces may use
+   * configs other than egl_config (such as 10-bit ones) */
+  gboolean egl_context_no_config;
 
   EGLSurface current_read_surface;
   EGLSurface current_draw_surface;
