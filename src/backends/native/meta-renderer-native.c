@@ -142,6 +142,8 @@ typedef struct _MetaRendererNativeGpuData
     /* For GPU blit mode */
     EGLContext egl_context;
     EGLConfig egl_config;
+    /* The context was made without a config, so surfaces may use others */
+    gboolean egl_context_no_config;
   } secondary;
 } MetaRendererNativeGpuData;
 
@@ -201,6 +203,9 @@ typedef struct _MetaOnscreenNative
   MetaCrtc *crtc;
 
   MetaOnscreenNativeSecondaryGpuState *secondary_gpu_state;
+
+  /* Redraw the whole frame every time instead of trusting the buffer age */
+  gboolean full_redraws;
 
   struct {
     struct gbm_surface *surface;
@@ -265,6 +270,19 @@ G_DEFINE_TYPE_WITH_CODE (MetaRendererNative,
 
 static const CoglWinsysEGLVtable _cogl_winsys_egl_vtable;
 static const CoglWinsysVtable *parent_vtable;
+
+static int
+meta_onscreen_native_get_buffer_age (CoglOnscreen *onscreen)
+{
+  CoglOnscreenEGL *onscreen_egl = onscreen->winsys;
+  MetaOnscreenNative *onscreen_native = onscreen_egl->platform;
+
+  /* An age of 0 makes Clutter repaint everything */
+  if (onscreen_native->full_redraws)
+    return 0;
+
+  return parent_vtable->onscreen_get_buffer_age (onscreen);
+}
 
 static void
 release_dumb_fb (MetaDumbBuffer *dumb_fb,
@@ -427,6 +445,19 @@ get_linear_modifier (void)
   return modifiers;
 }
 
+#ifndef EGL_NO_CONFIG_KHR
+#define EGL_NO_CONFIG_KHR ((EGLConfig) 0)
+#endif
+
+static gboolean onscreen_wants_10bit (MetaOnscreenNative *onscreen_native);
+
+static gboolean choose_deep_egl_config (MetaEgl    *egl,
+                                        EGLDisplay  egl_display,
+                                        EGLint      renderable_type,
+                                        uint32_t    format,
+                                        EGLConfig  *out_config,
+                                        GError    **error);
+
 static GArray *
 get_supported_kms_formats (CoglOnscreen *onscreen)
 {
@@ -453,14 +484,44 @@ init_secondary_gpu_state_gpu_copy_mode (MetaRendererNative         *renderer_nat
   EGLSurface egl_surface;
   MetaOnscreenNativeSecondaryGpuState *secondary_gpu_state;
   MetaGpuKms *gpu_kms;
+  uint32_t format;
+  EGLConfig egl_config;
 
   width = cogl_framebuffer_get_width (framebuffer);
   height = cogl_framebuffer_get_height (framebuffer);
 
+  format = GBM_FORMAT_XRGB8888;
+  egl_config = renderer_gpu_data->secondary.egl_config;
+
+  if (onscreen_wants_10bit (onscreen_native))
+    {
+      g_autoptr (GError) local_error = NULL;
+      EGLConfig config;
+
+      if (!renderer_gpu_data->secondary.egl_context_no_config)
+        {
+          g_warning_once ("10-bit output unavailable on the secondary GPU: "
+                          "its EGL context has a fixed config");
+        }
+      else if (!choose_deep_egl_config (egl, renderer_gpu_data->egl_display,
+                                        EGL_OPENGL_ES3_BIT,
+                                        GBM_FORMAT_XRGB2101010, &config,
+                                        &local_error))
+        {
+          g_warning ("10-bit output unavailable on the secondary GPU, "
+                     "using 8 bits: %s", local_error->message);
+        }
+      else
+        {
+          format = GBM_FORMAT_XRGB2101010;
+          egl_config = config;
+        }
+    }
+
   errno = 0;
   gbm_surface = gbm_surface_create (renderer_gpu_data->gbm.device,
                                     width, height,
-                                    GBM_FORMAT_XRGB8888,
+                                    format,
                                     GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
   if (!gbm_surface)
     {
@@ -474,7 +535,7 @@ init_secondary_gpu_state_gpu_copy_mode (MetaRendererNative         *renderer_nat
       errno = 0;
       gbm_surface = gbm_surface_create (renderer_gpu_data->gbm.device,
                                         width, height,
-                                        GBM_FORMAT_XRGB8888,
+                                        format,
                                         0);
     }
 
@@ -490,7 +551,7 @@ init_secondary_gpu_state_gpu_copy_mode (MetaRendererNative         *renderer_nat
   egl_surface =
     meta_egl_create_window_surface (egl,
                                     renderer_gpu_data->egl_display,
-                                    renderer_gpu_data->secondary.egl_config,
+                                    egl_config,
                                     egl_native_window,
                                     NULL,
                                     error);
@@ -499,6 +560,10 @@ init_secondary_gpu_state_gpu_copy_mode (MetaRendererNative         *renderer_nat
       gbm_surface_destroy (gbm_surface);
       return FALSE;
     }
+
+  if (format == GBM_FORMAT_XRGB2101010)
+    g_message ("Using a 10-bit buffer for %s on the secondary GPU",
+               onscreen_native->output->name);
 
   secondary_gpu_state = g_new0 (MetaOnscreenNativeSecondaryGpuState, 1);
 
@@ -2590,12 +2655,14 @@ should_surface_be_sharable (CoglOnscreen *onscreen)
 }
 
 static gboolean
-meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
-                                         int                  width,
-                                         int                  height,
-                                         struct gbm_surface **gbm_surface,
-                                         EGLSurface          *egl_surface,
-                                         GError             **error)
+create_surface_gbm_for_format (CoglOnscreen        *onscreen,
+                               int                  width,
+                               int                  height,
+                               uint32_t             format,
+                               EGLConfig            egl_config,
+                               struct gbm_surface **gbm_surface,
+                               EGLSurface          *egl_surface,
+                               GError             **error)
 {
   CoglOnscreenEGL *onscreen_egl = onscreen->winsys;
   MetaOnscreenNative *onscreen_native = onscreen_egl->platform;
@@ -2604,14 +2671,12 @@ meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
   CoglFramebuffer *framebuffer = COGL_FRAMEBUFFER (onscreen);
   CoglContext *cogl_context = framebuffer->context;
   CoglDisplay *cogl_display = cogl_context->display;
-  CoglDisplayEGL *cogl_display_egl = cogl_display->winsys;
   CoglRenderer *cogl_renderer = cogl_display->renderer;
   CoglRendererEGL *cogl_renderer_egl = cogl_renderer->winsys;
   MetaRendererNativeGpuData *renderer_gpu_data = cogl_renderer_egl->platform;
   struct gbm_surface *new_gbm_surface = NULL;
   EGLNativeWindowType egl_native_window;
   EGLSurface new_egl_surface;
-  uint32_t format = GBM_FORMAT_XRGB8888;
   GArray *modifiers;
 
   renderer_gpu_data =
@@ -2682,7 +2747,7 @@ meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
   new_egl_surface =
     meta_egl_create_window_surface (egl,
                                     cogl_renderer_egl->edpy,
-                                    cogl_display_egl->egl_config,
+                                    egl_config,
                                     egl_native_window,
                                     NULL,
                                     error);
@@ -2696,6 +2761,168 @@ meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
   *egl_surface = new_egl_surface;
 
   return TRUE;
+}
+
+/* An output in the BT.2100 color mode gets 10-bit buffers, so HDR content
+ * keeps its precision on the way to the monitor */
+static gboolean
+onscreen_wants_10bit (MetaOnscreenNative *onscreen_native)
+{
+  return onscreen_native->output &&
+         onscreen_native->output->color_mode == META_OUTPUT_COLOR_MODE_BT2100;
+}
+
+static gboolean
+choose_deep_egl_config (MetaEgl     *egl,
+                        EGLDisplay   egl_display,
+                        EGLint       renderable_type,
+                        uint32_t     format,
+                        EGLConfig   *out_config,
+                        GError     **error)
+{
+  gboolean is_float = format == GBM_FORMAT_ABGR16161616F;
+  EGLint bits = is_float ? 16 : 10;
+  EGLint attributes[] = {
+    EGL_RED_SIZE, bits,
+    EGL_GREEN_SIZE, bits,
+    EGL_BLUE_SIZE, bits,
+    EGL_ALPHA_SIZE, EGL_DONT_CARE,
+    EGL_BUFFER_SIZE, EGL_DONT_CARE,
+    EGL_RENDERABLE_TYPE, renderable_type,
+    EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+    EGL_COLOR_COMPONENT_TYPE_EXT, is_float ?
+      EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT : EGL_COLOR_COMPONENT_TYPE_FIXED_EXT,
+    EGL_NONE
+  };
+
+  if (!meta_egl_has_extensions (egl, egl_display, NULL,
+                                "EGL_EXT_pixel_format_float", NULL))
+    attributes[G_N_ELEMENTS (attributes) - 3] = EGL_NONE;
+
+  return choose_egl_config_from_gbm_format (egl, egl_display, attributes,
+                                            format, out_config, error);
+}
+
+/* A deep format can be used if whatever shows the buffer accepts it: the
+ * CRTC that scans it out, or the secondary GPU that copies it */
+static gboolean
+onscreen_can_show_format (CoglOnscreen *onscreen,
+                          uint32_t      format)
+{
+  CoglOnscreenEGL *onscreen_egl = onscreen->winsys;
+  MetaOnscreenNative *onscreen_native = onscreen_egl->platform;
+  MetaOnscreenNativeSecondaryGpuState *secondary_gpu_state =
+    onscreen_native->secondary_gpu_state;
+  g_autoptr (GArray) formats = NULL;
+  unsigned int i;
+
+  if (secondary_gpu_state &&
+      secondary_gpu_state->renderer_gpu_data->secondary.copy_mode !=
+      META_SHARED_FRAMEBUFFER_COPY_MODE_ZERO)
+    return TRUE;
+
+  formats = get_supported_kms_formats (onscreen);
+  if (!formats)
+    return FALSE;
+
+  for (i = 0; i < formats->len; i++)
+    {
+      if (g_array_index (formats, uint32_t, i) == format)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static gboolean
+meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
+                                         int                  width,
+                                         int                  height,
+                                         struct gbm_surface **gbm_surface,
+                                         EGLSurface          *egl_surface,
+                                         GError             **error)
+{
+  CoglOnscreenEGL *onscreen_egl = onscreen->winsys;
+  MetaOnscreenNative *onscreen_native = onscreen_egl->platform;
+  MetaEgl *egl = meta_onscreen_native_get_egl (onscreen_native);
+  CoglContext *cogl_context = COGL_FRAMEBUFFER (onscreen)->context;
+  CoglDisplay *cogl_display = cogl_context->display;
+  CoglDisplayEGL *cogl_display_egl = cogl_display->winsys;
+  CoglRendererEGL *cogl_renderer_egl = cogl_display->renderer->winsys;
+
+  if (onscreen_wants_10bit (onscreen_native))
+    {
+      /* Some drivers (NVIDIA) have no 10-bit configs, but half floats keep
+       * at least as much precision */
+      static const uint32_t deep_formats[] = {
+        GBM_FORMAT_XRGB2101010,
+        GBM_FORMAT_ABGR16161616F,
+      };
+      g_autoptr (GError) local_error = NULL;
+      EGLint renderable_type = 0;
+      unsigned int i;
+
+      if (!cogl_display_egl->egl_context_no_config)
+        {
+          g_warning_once ("10-bit output unavailable: the EGL context has a "
+                          "fixed config (no EGL_KHR_no_config_context)");
+          goto fallback;
+        }
+
+      if (!meta_egl_get_config_attrib (egl, cogl_renderer_egl->edpy,
+                                       cogl_display_egl->egl_config,
+                                       EGL_RENDERABLE_TYPE,
+                                       &renderable_type, &local_error))
+        {
+          g_warning ("10-bit output unavailable, using 8 bits: %s",
+                     local_error->message);
+          goto fallback;
+        }
+
+      for (i = 0; i < G_N_ELEMENTS (deep_formats); i++)
+        {
+          EGLConfig config;
+
+          g_clear_error (&local_error);
+
+          if (!onscreen_can_show_format (onscreen, deep_formats[i]))
+            continue;
+
+          if (!choose_deep_egl_config (egl, cogl_renderer_egl->edpy,
+                                       renderable_type, deep_formats[i],
+                                       &config, &local_error) ||
+              !create_surface_gbm_for_format (onscreen, width, height,
+                                              deep_formats[i], config,
+                                              gbm_surface, egl_surface,
+                                              &local_error))
+            {
+              g_debug ("No %s buffer for %s: %s",
+                       deep_formats[i] == GBM_FORMAT_XRGB2101010 ?
+                       "10-bit" : "half float",
+                       onscreen_native->output->name,
+                       local_error->message);
+              continue;
+            }
+
+          g_message ("Using a %s buffer for %s",
+                     deep_formats[i] == GBM_FORMAT_XRGB2101010 ?
+                     "10-bit" : "half float",
+                     onscreen_native->output->name);
+          onscreen_native->full_redraws = TRUE;
+          return TRUE;
+        }
+
+      g_warning ("10-bit output unavailable for %s, using 8 bits%s%s",
+                 onscreen_native->output->name,
+                 local_error ? ": " : "",
+                 local_error ? local_error->message : "");
+    }
+
+fallback:
+  return create_surface_gbm_for_format (onscreen, width, height,
+                                        GBM_FORMAT_XRGB8888,
+                                        cogl_display_egl->egl_config,
+                                        gbm_surface, egl_surface, error);
 }
 
 #ifdef HAVE_EGL_DEVICE
@@ -3284,6 +3511,7 @@ get_native_cogl_winsys_vtable (CoglRenderer *cogl_renderer)
       vtable.onscreen_swap_buffers_with_damage =
         meta_onscreen_native_swap_buffers_with_damage;
       vtable.onscreen_direct_scanout = meta_onscreen_native_direct_scanout;
+      vtable.onscreen_get_buffer_age = meta_onscreen_native_get_buffer_age;
 
       vtable.context_get_clock_time = meta_renderer_native_get_clock_time;
 
@@ -3586,6 +3814,7 @@ static EGLContext
 create_secondary_egl_context (MetaEgl   *egl,
                               EGLDisplay egl_display,
                               EGLConfig  egl_config,
+                              gboolean  *out_no_config,
                               GError   **error)
 {
   EGLint attributes[] = {
@@ -3593,6 +3822,28 @@ create_secondary_egl_context (MetaEgl   *egl,
     EGL_NONE
   };
 
+  /* Without a config the context can draw to surfaces of any format,
+   * which 10-bit outputs need */
+  if (meta_egl_has_extensions (egl, egl_display, NULL,
+                               "EGL_KHR_no_config_context",
+                               NULL))
+    {
+      EGLContext egl_context;
+
+      egl_context = meta_egl_create_context (egl,
+                                             egl_display,
+                                             EGL_NO_CONFIG_KHR,
+                                             EGL_NO_CONTEXT,
+                                             attributes,
+                                             NULL);
+      if (egl_context != EGL_NO_CONTEXT)
+        {
+          *out_no_config = TRUE;
+          return egl_context;
+        }
+    }
+
+  *out_no_config = FALSE;
   return meta_egl_create_context (egl,
                                   egl_display,
                                   egl_config,
@@ -3621,6 +3872,7 @@ init_secondary_gpu_data_gpu (MetaRendererNativeGpuData *renderer_gpu_data,
   EGLDisplay egl_display = renderer_gpu_data->egl_display;
   EGLConfig egl_config;
   EGLContext egl_context;
+  gboolean no_config;
   const char **missing_gl_extensions;
   const char *renderer_str;
 
@@ -3628,7 +3880,8 @@ init_secondary_gpu_data_gpu (MetaRendererNativeGpuData *renderer_gpu_data,
                                     &egl_config, error))
     return FALSE;
 
-  egl_context = create_secondary_egl_context (egl, egl_display, egl_config, error);
+  egl_context = create_secondary_egl_context (egl, egl_display, egl_config,
+                                              &no_config, error);
   if (egl_context == EGL_NO_CONTEXT)
     return FALSE;
 
@@ -3677,6 +3930,7 @@ init_secondary_gpu_data_gpu (MetaRendererNativeGpuData *renderer_gpu_data,
   renderer_gpu_data->secondary.is_hardware_rendering = TRUE;
   renderer_gpu_data->secondary.egl_context = egl_context;
   renderer_gpu_data->secondary.egl_config = egl_config;
+  renderer_gpu_data->secondary.egl_context_no_config = no_config;
   renderer_gpu_data->secondary.copy_mode = META_SHARED_FRAMEBUFFER_COPY_MODE_SECONDARY_GPU;
 
   renderer_gpu_data->secondary.has_EGL_EXT_image_dma_buf_import_modifiers =
