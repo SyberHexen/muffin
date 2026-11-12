@@ -1318,6 +1318,52 @@ create_for_builtin_display_rotation (MetaMonitorConfigManager *config_manager,
 }
 
 MetaMonitorsConfig *
+meta_monitor_config_manager_create_for_color_mode (MetaMonitorConfigManager *config_manager,
+                                                   MetaMonitor              *monitor,
+                                                   MetaOutputColorMode       color_mode)
+{
+  MetaMonitorsConfig *current_config = config_manager->current_config;
+  MetaMonitorSpec *monitor_spec = meta_monitor_get_spec (monitor);
+  GList *logical_monitor_configs, *l, *k;
+  gboolean found = FALSE;
+
+  if (!current_config)
+    return NULL;
+
+  logical_monitor_configs =
+    clone_logical_monitor_config_list (current_config->logical_monitor_configs);
+
+  for (l = logical_monitor_configs; l; l = l->next)
+    {
+      MetaLogicalMonitorConfig *logical_monitor_config = l->data;
+
+      for (k = logical_monitor_config->monitor_configs; k; k = k->next)
+        {
+          MetaMonitorConfig *monitor_config = k->data;
+
+          if (!meta_monitor_spec_equals (monitor_config->monitor_spec,
+                                         monitor_spec))
+            continue;
+
+          monitor_config->color_mode = color_mode;
+          found = TRUE;
+        }
+    }
+
+  if (!found)
+    {
+      g_list_free_full (logical_monitor_configs,
+                        (GDestroyNotify) meta_logical_monitor_config_free);
+      return NULL;
+    }
+
+  return meta_monitors_config_new (config_manager->monitor_manager,
+                                   logical_monitor_configs,
+                                   current_config->layout_mode,
+                                   META_MONITORS_CONFIG_FLAG_NONE);
+}
+
+MetaMonitorsConfig *
 meta_monitor_config_manager_create_for_orientation (MetaMonitorConfigManager *config_manager,
                                                     MetaMonitorTransform      transform)
 {

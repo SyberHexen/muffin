@@ -4647,6 +4647,11 @@ meta_window_move_resize_internal (MetaWindow          *window,
     {
       moved_or_resized = TRUE;
       g_signal_emit (window, window_signals[SIZE_CHANGED], 0);
+
+      /* A window growing to cover its monitor counts as fullscreen for HDR
+       * passthrough */
+      if (meta_is_wayland_compositor ())
+        meta_display_queue_check_fullscreen (window->display);
     }
 
   if (moved_or_resized || did_placement)

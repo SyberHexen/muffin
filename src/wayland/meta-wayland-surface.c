@@ -805,10 +805,31 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
 
   if (state->has_new_color_description)
     {
+      MetaWindow *window;
+      gboolean was_hdr10;
+
+      was_hdr10 =
+        meta_wayland_color_description_is_hdr10 (surface->color_management.description);
       g_clear_pointer (&surface->color_management.description,
                        meta_wayland_color_description_unref);
       surface->color_management.description =
         g_steal_pointer (&state->color_description);
+
+      /* Whether a fullscreen window is HDR may have changed */
+      window = meta_wayland_surface_get_toplevel_window (surface);
+      if (window)
+        {
+          gboolean is_hdr10 =
+            meta_wayland_color_description_is_hdr10 (surface->color_management.description);
+
+          if (is_hdr10 != was_hdr10)
+            g_message ("HDR passthrough: \"%s\" %s HDR10 content",
+                       meta_window_get_title (window) ?
+                       meta_window_get_title (window) : "(untitled)",
+                       is_hdr10 ? "shows" : "no longer shows");
+
+          meta_display_queue_check_fullscreen (window->display);
+        }
     }
 
   if (!cairo_region_is_empty (state->surface_damage) ||
