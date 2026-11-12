@@ -88,6 +88,7 @@
 #include "wayland/meta-xwayland-private.h"
 #include "wayland/meta-wayland-tablet-seat.h"
 #include "wayland/meta-wayland-tablet-pad.h"
+#include "wayland/meta-wayland-color-management.h"
 #endif
 
 #ifdef HAVE_NATIVE_BACKEND
@@ -3485,6 +3486,54 @@ meta_display_queue_workarea_recalc (MetaDisplay *display)
     }
 }
 
+#ifdef HAVE_WAYLAND
+/*
+ * The window filling each logical monitor, for HDR passthrough: the topmost
+ * normal window on the monitor, if it is fullscreen or covers the monitor
+ * exactly, the way games in borderless windowed mode do. Docks, menus and
+ * other transient windows, and windows too small to obscure anything, are
+ * looked through.
+ */
+static GHashTable *
+collect_fullscreen_windows (MetaDisplay *display)
+{
+  GHashTable *fullscreen_windows = g_hash_table_new (NULL, NULL);
+  g_autoptr (GHashTable) decided = g_hash_table_new (NULL, NULL);
+  MetaWindow *window;
+
+  for (window = meta_stack_get_top (display->stack);
+       window;
+       window = meta_stack_get_below (display->stack, window, FALSE))
+    {
+      MetaLogicalMonitor *logical_monitor = window->monitor;
+      MetaRectangle window_rect;
+
+      if (window->hidden || !logical_monitor ||
+          g_hash_table_contains (decided, logical_monitor))
+        continue;
+
+      if (!window->fullscreen &&
+          window->type != META_WINDOW_NORMAL &&
+          window->type != META_WINDOW_DIALOG)
+        continue;
+
+      meta_window_get_frame_rect (window, &window_rect);
+      if (!window->fullscreen &&
+          (window_rect.width <= MIN_FULLSCREEN_OBSCURING_WINDOW_SIZE ||
+           window_rect.height <= MIN_FULLSCREEN_OBSCURING_WINDOW_SIZE))
+        continue;
+
+      g_hash_table_add (decided, logical_monitor);
+
+      if (window->fullscreen ||
+          meta_rectangle_equal (&window_rect, &logical_monitor->rect))
+        g_hash_table_insert (fullscreen_windows, logical_monitor, window);
+    }
+
+  return fullscreen_windows;
+}
+#endif
+
 static gboolean
 check_fullscreen_func (gpointer data)
 {
@@ -3594,6 +3643,16 @@ check_fullscreen_func (gpointer data)
 
       g_signal_emit (display, display_signals[IN_FULLSCREEN_CHANGED], 0, NULL);
     }
+
+#ifdef HAVE_WAYLAND
+  if (meta_is_wayland_compositor ())
+    {
+      g_autoptr (GHashTable) fullscreen_windows = NULL;
+
+      fullscreen_windows = collect_fullscreen_windows (display);
+      meta_wayland_color_management_update_fullscreen (fullscreen_windows);
+    }
+#endif
 
   return FALSE;
 }
