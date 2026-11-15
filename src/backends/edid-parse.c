@@ -540,3 +540,57 @@ decode_edid (const uchar *edid)
       return NULL;
     }
 }
+
+/* The HDR static metadata data block (CTA-861.3) of the CTA-861 extension
+ * blocks, if any */
+gboolean
+decode_edid_hdr_static_metadata (const uchar           *edid,
+                                 gsize                  len,
+                                 EdidHdrStaticMetadata *out)
+{
+  gsize n_blocks, b;
+
+  memset (out, 0, sizeof (*out));
+  if (!edid || len < 128)
+    return FALSE;
+
+  n_blocks = MIN ((gsize) edid[126], len / 128 - 1);
+  for (b = 1; b <= n_blocks; b++)
+    {
+      const uchar *x = edid + 128 * b;
+      unsigned int end, pos = 4;
+
+      if (x[0] != 0x02 || x[2] < 4)    /* not a CTA extension with blocks */
+        continue;
+
+      end = MIN (x[2], 127);
+      while (pos < end)
+        {
+          unsigned int tag = x[pos] >> 5;
+          unsigned int length = x[pos] & 0x1f;
+          const uchar *data = x + pos + 1;
+
+          if (pos + 1 + length > end)
+            break;
+
+          /* extended tag 6: HDR static metadata */
+          if (tag == 7 && length >= 3 && data[0] == 0x06)
+            {
+              out->present = TRUE;
+              out->eotfs = data[1] & 0x3f;
+              if (length >= 4 && data[3])
+                out->max_luminance = 50.0 * pow (2.0, data[3] / 32.0);
+              if (length >= 5 && data[4])
+                out->max_frame_avg = 50.0 * pow (2.0, data[4] / 32.0);
+              if (length >= 6 && data[5] && out->max_luminance > 0)
+                out->min_luminance = out->max_luminance *
+                                     pow (data[5] / 255.0, 2.0) / 100.0;
+              return TRUE;
+            }
+
+          pos += 1 + length;
+        }
+    }
+
+  return FALSE;
+}

@@ -25,6 +25,8 @@
 #ifndef EDID_H
 #define EDID_H
 
+#include <glib.h>
+
 typedef unsigned char uchar;
 typedef struct MonitorInfo MonitorInfo;
 typedef struct Timing Timing;
@@ -187,6 +189,21 @@ struct MonitorInfo
   char		dsc_product_name[14];
   char		dsc_string[14];		/* Unspecified ASCII data */
 };
+
+/* What a CTA-861 HDR static metadata data block says about the display's
+ * luminance, in cd/m²; 0 for what it leaves out */
+typedef struct
+{
+  gboolean present;          /* the display has the block */
+  unsigned int eotfs;        /* bit mask: 1 SDR, 2 traditional HDR, 4 PQ, 8 HLG */
+  double max_luminance;      /* desired content max luminance */
+  double max_frame_avg;      /* desired content max frame-average luminance */
+  double min_luminance;      /* desired content min luminance */
+} EdidHdrStaticMetadata;
+
+gboolean decode_edid_hdr_static_metadata (const uchar           *edid,
+                                          gsize                  len,
+                                          EdidHdrStaticMetadata *out);
 
 MonitorInfo *decode_edid (const uchar *data);
 
