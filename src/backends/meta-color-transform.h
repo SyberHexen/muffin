@@ -34,4 +34,7 @@ CoglSnippet * meta_color_transform_get_composite_to_pq_snippet (void);
 
 CoglSnippet * meta_color_transform_get_pq_to_composite_snippet (void);
 
+void meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
+                                         float         nits);
+
 #endif /* META_COLOR_TRANSFORM_H */
