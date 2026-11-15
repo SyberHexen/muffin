@@ -32,6 +32,8 @@
 
 #include "backends/meta-renderer-view.h"
 
+#include <string.h>
+
 #include "backends/meta-color-transform.h"
 #include "backends/meta-renderer.h"
 #include "clutter/clutter-muffin.h"
@@ -66,6 +68,11 @@ struct _MetaRendererView
   unsigned short *gamma_red;
   unsigned short *gamma_green;
   unsigned short *gamma_blue;
+
+  /* An SDR view of a wide gamut display that shows SDR signals in its own
+   * primaries: the blit converts the composited BT.709 colors to them */
+  gboolean has_to_display;
+  float to_display[9];
 };
 
 G_DEFINE_TYPE (MetaRendererView, meta_renderer_view,
@@ -127,6 +134,30 @@ meta_renderer_view_set_gamma (MetaRendererView     *view,
       view->gamma_blue = g_memdup2 (blue, size * sizeof (*blue));
     }
   clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
+}
+
+/**
+ * meta_renderer_view_set_to_display: (skip)
+ * @to_display: (nullable): linear BT.709 to the display's linear RGB, row
+ *   major, or %NULL for none
+ *
+ * Makes an SDR view convert its colors to the display's primaries in the
+ * blit from its offscreen.
+ */
+void
+meta_renderer_view_set_to_display (MetaRendererView *view,
+                                   const float       to_display[9])
+{
+  view->has_to_display = to_display != NULL;
+  if (to_display)
+    memcpy (view->to_display, to_display, sizeof (view->to_display));
+  clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
+}
+
+gboolean
+meta_renderer_view_has_to_display (MetaRendererView *view)
+{
+  return view->has_to_display;
 }
 
 static void
@@ -207,6 +238,14 @@ meta_renderer_view_setup_offscreen_blit_pipeline (ClutterStageView *view,
         }
       meta_color_transform_set_sdr_white (pipeline,
                                           renderer_view->sdr_white_level);
+    }
+  else if (META_RENDERER_VIEW (view)->has_to_display)
+    {
+      MetaRendererView *renderer_view = META_RENDERER_VIEW (view);
+
+      cogl_pipeline_add_snippet (pipeline,
+                                 meta_color_transform_get_composite_to_display_snippet ());
+      meta_color_transform_set_to_display (pipeline, renderer_view->to_display);
     }
 }
 

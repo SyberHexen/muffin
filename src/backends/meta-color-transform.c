@@ -328,6 +328,45 @@ meta_color_transform_get_composite_to_pq_lut_snippet (void)
   return snippet;
 }
 
+/**
+ * meta_color_transform_get_composite_to_display_snippet: (skip)
+ *
+ * Returns: (transfer none): a fragment snippet converting the composited
+ *   colors (BT.709, the SDR encoding) to the primaries of an SDR display
+ *   (see meta_color_transform_set_to_display()), for the final blit of a view
+ *   of a wide gamut display that shows SDR signals in its own primaries
+ */
+CoglSnippet *
+meta_color_transform_get_composite_to_display_snippet (void)
+{
+  static CoglSnippet *snippet = NULL;
+
+  if (!snippet)
+    /* In the light the display gives for the signal (a 2.2 power, as SDR
+     * displays decode it), not in MUFFIN_HDR_SDR_TRANSFER, which is how SDR
+     * content is shown in HDR */
+    snippet = create_snippet ("uniform mat3 meta_cc_to_display;\n",
+      "  vec3 l = meta_cc_g22_to_linear (c);\n"
+      "  l = clamp (meta_cc_to_display * l, 0.0, 1.0);\n"
+      "  c = meta_cc_linear_to_g22 (l);\n");
+
+  return snippet;
+}
+
+/**
+ * meta_color_transform_set_to_display: (skip)
+ * @to_display: linear BT.709 to the display's linear RGB, row major
+ */
+void
+meta_color_transform_set_to_display (CoglPipeline *pipeline,
+                                     const float   to_display[9])
+{
+  cogl_pipeline_set_uniform_matrix (pipeline,
+                                    cogl_pipeline_get_uniform_location (pipeline,
+                                                                        "meta_cc_to_display"),
+                                    3, 1, TRUE, to_display);
+}
+
 /* How the content of each MetaColorTransformDecode becomes linear light, as
  * a fraction of 10000 cd/m²: SDR content has SDR white at the white level
  * the view composites with, linear content its 1.0 at meta_cc_content_unit
@@ -497,29 +536,21 @@ rgb_to_xyz (const double p[8],
       m[i][j] = xyz[i][j] * s[j];
 }
 
-/**
- * meta_color_transform_get_to_bt709: (skip)
- * @primaries: x, y of red, green, blue and white, times 1000000
- * @to_bt709: (out): linear RGB in @primaries to linear BT.709, row major
- *
- * The white points are taken to be the same (D65), as they are for every
- * named set of primaries clients can use.
- */
-void
-meta_color_transform_get_to_bt709 (const int32_t primaries[8],
-                                   float         to_bt709[9])
+static const double bt709_primaries[8] = {
+  0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290,
+};
+
+/* Linear RGB in the primaries @src to linear RGB in @dst, row major */
+static void
+rgb_to_rgb (const double src_primaries[8],
+            const double dst_primaries[8],
+            float        out[9])
 {
-  static const double bt709[8] = {
-    0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290,
-  };
-  double p[8], src[3][3], dst[3][3], inv[3][3], det;
+  double src[3][3], dst[3][3], inv[3][3], det;
   int i, j, k;
 
-  for (i = 0; i < 8; i++)
-    p[i] = primaries[i] / 1000000.0;
-
-  rgb_to_xyz (p, src);
-  rgb_to_xyz (bt709, dst);
+  rgb_to_xyz (src_primaries, src);
+  rgb_to_xyz (dst_primaries, dst);
 
   det = dst[0][0] * (dst[1][1] * dst[2][2] - dst[1][2] * dst[2][1]) -
         dst[0][1] * (dst[1][0] * dst[2][2] - dst[1][2] * dst[2][0]) +
@@ -541,8 +572,52 @@ meta_color_transform_get_to_bt709 (const int32_t primaries[8],
 
         for (k = 0; k < 3; k++)
           v += inv[i][k] * src[k][j];
-        to_bt709[i * 3 + j] = v;
+        out[i * 3 + j] = v;
       }
+}
+
+/**
+ * meta_color_transform_get_to_bt709: (skip)
+ * @primaries: x, y of red, green, blue and white, times 1000000
+ * @to_bt709: (out): linear RGB in @primaries to linear BT.709, row major
+ *
+ * The white points are taken to be the same (D65), as they are for every
+ * named set of primaries clients can use.
+ */
+void
+meta_color_transform_get_to_bt709 (const int32_t primaries[8],
+                                   float         to_bt709[9])
+{
+  double p[8];
+  int i;
+
+  for (i = 0; i < 8; i++)
+    p[i] = primaries[i] / 1000000.0;
+
+  rgb_to_rgb (p, bt709_primaries, to_bt709);
+}
+
+/**
+ * meta_color_transform_get_bt709_to_display: (skip)
+ * @display: x, y of the display's red, green, blue and white
+ * @to_display: (out): linear BT.709 to the display's linear RGB, row major
+ *
+ * BT.709 white is taken to be the display's white, so white and greys stay
+ * neutral on it whatever white point its EDID gives.
+ */
+void
+meta_color_transform_get_bt709_to_display (const double display[8],
+                                           float        to_display[9])
+{
+  double src[8];
+  int i;
+
+  for (i = 0; i < 6; i++)
+    src[i] = bt709_primaries[i];
+  src[6] = display[6];
+  src[7] = display[7];
+
+  rgb_to_rgb (src, display, to_display);
 }
 
 /**

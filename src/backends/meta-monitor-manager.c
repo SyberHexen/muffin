@@ -3730,6 +3730,25 @@ meta_output_parse_edid (MetaOutput *output,
           output->serial = g_strdup_printf ("0x%08x", parsed_edid->serial_number);
         }
 
+      {
+        double p[8] = { parsed_edid->red_x, parsed_edid->red_y,
+                        parsed_edid->green_x, parsed_edid->green_y,
+                        parsed_edid->blue_x, parsed_edid->blue_y,
+                        parsed_edid->white_x, parsed_edid->white_y };
+        gboolean valid = TRUE;
+        int i;
+
+        for (i = 0; i < 8; i++)
+          {
+            if (!(p[i] > 0.0 && p[i] < 1.0))
+              valid = FALSE;
+          }
+
+        output->has_edid_primaries = valid;
+        if (valid)
+          memcpy (output->edid_primaries, p, sizeof p);
+      }
+
       g_free (parsed_edid);
     }
 

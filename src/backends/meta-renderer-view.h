@@ -41,4 +41,9 @@ void meta_renderer_view_set_gamma (MetaRendererView     *view,
                                    const unsigned short *green,
                                    const unsigned short *blue);
 
+void meta_renderer_view_set_to_display (MetaRendererView *view,
+                                        const float       to_display[9]);
+
+gboolean meta_renderer_view_has_to_display (MetaRendererView *view);
+
 #endif /* META_RENDERER_VIEW_H */
