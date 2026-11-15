@@ -44,6 +44,7 @@
 #include "clutter-clone.h"
 #include "clutter-debug.h"
 #include "clutter-main.h"
+#include "clutter-muffin.h"
 #include "clutter-paint-volume-private.h"
 #include "clutter-private.h"
 
@@ -463,4 +464,46 @@ clutter_clone_get_source (ClutterClone *self)
   g_return_val_if_fail (CLUTTER_IS_CLONE (self), NULL);
 
   return self->priv->clone_source;
+}
+
+/**
+ * clutter_actor_paint_as_clone_source: (skip)
+ * @actor: a #ClutterActor
+ * @paint_context: the paint context
+ *
+ * Paints @actor as a #ClutterClone paints its source: at the origin of the
+ * current transformation, without the actor's own transformations (position,
+ * scale, translation from effects), fully opaque, and also while the actor
+ * is hidden.  Used to capture a window as it is, whatever is happening to it
+ * on screen.
+ */
+void
+clutter_actor_paint_as_clone_source (ClutterActor        *actor,
+                                     ClutterPaintContext *paint_context)
+{
+  gboolean was_unmapped = FALSE;
+
+  _clutter_actor_set_in_clone_paint (actor, TRUE);
+  clutter_actor_set_opacity_override (actor, 255);
+  _clutter_actor_set_enable_model_view_transform (actor, FALSE);
+
+  if (!clutter_actor_is_mapped (actor))
+    {
+      _clutter_actor_set_enable_paint_unmapped (actor, TRUE);
+      was_unmapped = TRUE;
+    }
+
+  if (clutter_actor_is_realized (actor))
+    {
+      _clutter_actor_push_clone_paint ();
+      clutter_actor_paint (actor, paint_context);
+      _clutter_actor_pop_clone_paint ();
+    }
+
+  if (was_unmapped)
+    _clutter_actor_set_enable_paint_unmapped (actor, FALSE);
+
+  _clutter_actor_set_enable_model_view_transform (actor, TRUE);
+  clutter_actor_set_opacity_override (actor, -1);
+  _clutter_actor_set_in_clone_paint (actor, FALSE);
 }
