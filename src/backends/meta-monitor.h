@@ -143,6 +143,10 @@ unsigned int meta_monitor_get_supported_color_modes (MetaMonitor *monitor);
 
 MetaOutputColorMode meta_monitor_get_color_mode (MetaMonitor *monitor);
 
+gboolean meta_monitor_get_hdr_auto_switch (MetaMonitor *monitor);
+
+float meta_monitor_get_sdr_white_level (MetaMonitor *monitor);
+
 META_EXPORT_TEST
 gboolean meta_monitor_is_laptop_panel (MetaMonitor *monitor);
 

@@ -1325,6 +1325,15 @@ apply_passthrough (gpointer user_data)
   return G_SOURCE_REMOVE;
 }
 
+/* Whether HDR passthrough has switched the output on @connector to the
+ * BT.2100 color mode, rather than its configuration */
+gboolean
+meta_wayland_color_management_is_auto_switched (const char *connector)
+{
+  return passthrough.switched &&
+         g_hash_table_contains (passthrough.switched, connector);
+}
+
 void
 meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows)
 {
@@ -1355,20 +1364,25 @@ meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows)
           MetaMonitor *monitor = k->data;
           const char *connector = meta_monitor_get_connector (monitor);
           MetaOutputColorMode current;
+          gboolean monitor_wanted;
 
           if (!monitor_supports_bt2100 (monitor))
             continue;
 
+          /* A monitor the user keeps out of automatic switching is never
+           * switched on, and switched back if it was before */
+          monitor_wanted = wanted && meta_monitor_get_hdr_auto_switch (monitor);
+
           g_hash_table_insert (passthrough.wanted, g_strdup (connector),
-                               GINT_TO_POINTER (wanted));
-          if (!wanted)
+                               GINT_TO_POINTER (monitor_wanted));
+          if (!monitor_wanted)
             g_hash_table_remove (passthrough.refused, connector);
 
           current = meta_monitor_get_color_mode (monitor);
-          if (wanted && current == META_OUTPUT_COLOR_MODE_DEFAULT &&
+          if (monitor_wanted && current == META_OUTPUT_COLOR_MODE_DEFAULT &&
               !g_hash_table_contains (passthrough.refused, connector))
             switch_on = TRUE;
-          else if (!wanted && current == META_OUTPUT_COLOR_MODE_BT2100 &&
+          else if (!monitor_wanted && current == META_OUTPUT_COLOR_MODE_BT2100 &&
                    g_hash_table_contains (passthrough.switched, connector))
             switch_off = TRUE;
         }

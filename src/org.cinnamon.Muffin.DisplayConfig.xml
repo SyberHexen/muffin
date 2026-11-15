@@ -337,6 +337,14 @@
 				function and HDR metadata) (absence of this means
 				it cannot be set)
 	    - "supported-color-modes" (au): the values "color-mode" accepts
+	    - "hdr-auto-switch" (b): whether HDR passthrough may switch the
+	      monitor to the BT.2100 color mode while a fullscreen window
+	      shows HDR10 content (with "supported-color-modes")
+	    - "hdr-auto-switched" (b): whether the current BT.2100 color mode
+	      was set by HDR passthrough rather than the configuration;
+	      clients should not store it as the color mode
+	    - "sdr-white-level" (u): the luminance SDR content is shown at in
+	      the BT.2100 color mode, in cd/m² (with "supported-color-modes")
 	    - "max-screen-size" (ii): the maximum size a screen may have
 				      (absence of this means unlimited screen
 				      size)
@@ -462,6 +470,9 @@
 				      when absent, the current one is kept.
 	        - "color-mode" (u): the color mode (see GetCurrentState); when
 				    absent, the current one is kept.
+	        - "hdr-auto-switch" (b): see GetCurrentState
+	        - "sdr-white-level" (u): see GetCurrentState; 80 to 1000, or 0
+	          for the default
 
 	@properties may effect the global monitor configuration state. Possible
 	properties are:

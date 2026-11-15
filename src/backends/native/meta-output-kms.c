@@ -449,6 +449,11 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
     output->color_mode = old_output->color_mode;
   else
     output->color_mode = META_OUTPUT_COLOR_MODE_DEFAULT;
+  if (old_output)
+    {
+      output->no_hdr_auto_switch = old_output->no_hdr_auto_switch;
+      output->sdr_white_level = old_output->sdr_white_level;
+    }
 
   meta_output_parse_edid (output, connector_state->edid_data);
 
