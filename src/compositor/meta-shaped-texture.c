@@ -77,6 +77,7 @@ struct _MetaShapedTexture
   CoglTexture *texture;
   CoglTexture *mask_texture;
   CoglSnippet *snippet;
+  CoglSnippet *color_snippet;
 
   CoglPipeline *base_pipeline;
   CoglPipeline *masked_pipeline;
@@ -254,6 +255,7 @@ meta_shaped_texture_dispose (GObject *object)
   g_clear_pointer (&stex->clip_region, cairo_region_destroy);
 
   g_clear_pointer (&stex->snippet, cogl_object_unref);
+  g_clear_pointer (&stex->color_snippet, cogl_object_unref);
 
   G_OBJECT_CLASS (meta_shaped_texture_parent_class)->dispose (object);
 }
@@ -366,6 +368,8 @@ get_base_pipeline (MetaShapedTexture *stex,
 
   if (stex->snippet)
     cogl_pipeline_add_layer_snippet (pipeline, 0, stex->snippet);
+  if (stex->color_snippet)
+    cogl_pipeline_add_snippet (pipeline, stex->color_snippet);
 
   stex->base_pipeline = pipeline;
 
@@ -1053,6 +1057,26 @@ meta_shaped_texture_set_snippet (MetaShapedTexture *stex,
   g_clear_pointer (&stex->snippet, cogl_object_unref);
   if (snippet)
     stex->snippet = cogl_object_ref (snippet);
+}
+
+/**
+ * meta_shaped_texture_set_color_snippet: (skip)
+ *
+ * Sets a fragment snippet converting the texture's colors to the ones the
+ * compositor blends in, or %NULL for content that needs no conversion.
+ */
+void
+meta_shaped_texture_set_color_snippet (MetaShapedTexture *stex,
+                                       CoglSnippet       *snippet)
+{
+  if (stex->color_snippet == snippet)
+    return;
+
+  meta_shaped_texture_reset_pipelines (stex);
+
+  g_clear_pointer (&stex->color_snippet, cogl_object_unref);
+  if (snippet)
+    stex->color_snippet = cogl_object_ref (snippet);
 }
 
 /**

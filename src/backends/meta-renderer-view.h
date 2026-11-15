@@ -18,6 +18,7 @@
 #ifndef META_RENDERER_VIEW_H
 #define META_RENDERER_VIEW_H
 
+#include "backends/meta-display-config-shared.h"
 #include "backends/meta-monitor-manager-private.h"
 #include "clutter/clutter-muffin.h"
 
@@ -27,5 +28,7 @@ G_DECLARE_FINAL_TYPE (MetaRendererView, meta_renderer_view,
                       ClutterStageViewCogl)
 
 MetaMonitorTransform meta_renderer_view_get_transform (MetaRendererView *view);
+
+MetaOutputColorMode meta_renderer_view_get_color_mode (MetaRendererView *view);
 
 #endif /* META_RENDERER_VIEW_H */
