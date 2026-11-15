@@ -31,4 +31,6 @@ MetaMonitorTransform meta_renderer_view_get_transform (MetaRendererView *view);
 
 MetaOutputColorMode meta_renderer_view_get_color_mode (MetaRendererView *view);
 
+float meta_renderer_view_get_sdr_white_level (MetaRendererView *view);
+
 #endif /* META_RENDERER_VIEW_H */

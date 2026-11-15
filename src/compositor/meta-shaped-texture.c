@@ -27,7 +27,9 @@
 
 #include "config.h"
 
+#include "backends/meta-color-transform.h"
 #include "backends/meta-monitor-transform.h"
+#include "backends/meta-renderer-view.h"
 #include "compositor/meta-shaped-texture-private.h"
 #include "core/boxes-private.h"
 
@@ -369,7 +371,12 @@ get_base_pipeline (MetaShapedTexture *stex,
   if (stex->snippet)
     cogl_pipeline_add_layer_snippet (pipeline, 0, stex->snippet);
   if (stex->color_snippet)
-    cogl_pipeline_add_snippet (pipeline, stex->color_snippet);
+    {
+      cogl_pipeline_add_snippet (pipeline, stex->color_snippet);
+      /* Overridden per view when painted, see get_sdr_white_level() */
+      meta_color_transform_set_sdr_white (pipeline,
+                                          meta_color_transform_get_sdr_white_nits ());
+    }
 
   stex->base_pipeline = pipeline;
 
@@ -532,6 +539,22 @@ flip_ints (int *x,
   *y = tmp;
 }
 
+/* The SDR white level content is converted with: that of the view being
+ * painted when it is in the BT.2100 color mode, so HDR content keeps its
+ * luminance, and the default elsewhere */
+static float
+get_sdr_white_level (ClutterPaintContext *paint_context)
+{
+  ClutterStageView *view = clutter_paint_context_get_stage_view (paint_context);
+
+  if (view && META_IS_RENDERER_VIEW (view) &&
+      meta_renderer_view_get_color_mode (META_RENDERER_VIEW (view)) ==
+      META_OUTPUT_COLOR_MODE_BT2100)
+    return meta_renderer_view_get_sdr_white_level (META_RENDERER_VIEW (view));
+
+  return meta_color_transform_get_sdr_white_nits ();
+}
+
 static void
 do_paint_content (MetaShapedTexture   *stex,
                   ClutterPaintNode    *root_node,
@@ -652,6 +675,9 @@ do_paint_content (MetaShapedTexture   *stex,
           CoglPipeline *opaque_pipeline;
 
           opaque_pipeline = get_unblended_pipeline (stex, ctx);
+          if (stex->color_snippet)
+            meta_color_transform_set_sdr_white (opaque_pipeline,
+                                                get_sdr_white_level (paint_context));
           cogl_pipeline_set_layer_texture (opaque_pipeline, 0, paint_tex);
           cogl_pipeline_set_layer_filters (opaque_pipeline, 0, filter, filter);
 
@@ -694,6 +720,9 @@ do_paint_content (MetaShapedTexture   *stex,
           cogl_pipeline_set_layer_filters (blended_pipeline, 1, filter, filter);
         }
 
+      if (stex->color_snippet)
+        meta_color_transform_set_sdr_white (blended_pipeline,
+                                            get_sdr_white_level (paint_context));
       cogl_pipeline_set_layer_texture (blended_pipeline, 0, paint_tex);
       cogl_pipeline_set_layer_filters (blended_pipeline, 0, filter, filter);
 
