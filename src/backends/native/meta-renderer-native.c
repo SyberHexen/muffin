@@ -3728,6 +3728,7 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                        "use-shadowfb", use_shadowfb,
                        "transform", view_transform,
                        "color-mode", output->color_mode,
+                       "sdr-white-level", meta_output_get_sdr_white_level (output),
                        NULL);
   g_clear_pointer (&offscreen, cogl_object_unref);
 
