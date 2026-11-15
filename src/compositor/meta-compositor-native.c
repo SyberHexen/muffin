@@ -244,13 +244,14 @@ maybe_assign_primary_plane (MetaCompositor *compositor)
             goto reconcile;
 
           /* Only HDR10 content can go straight to an output in the BT.2100
-           * color mode, and only SDR content to the others: the rest has to
-           * be composited to be converted. */
+           * color mode, and only content needing no conversion (BT.709 SDR)
+           * to the others: the rest has to be composited to be converted. */
           reason = "content not in the output's color mode";
           if (META_IS_RENDERER_VIEW (stage_view) &&
               (meta_renderer_view_get_color_mode (META_RENDERER_VIEW (stage_view)) ==
-               META_OUTPUT_COLOR_MODE_BT2100) !=
-              meta_wayland_color_description_is_hdr10 (surface->color_management.description))
+               META_OUTPUT_COLOR_MODE_BT2100 ?
+               !meta_wayland_color_description_is_hdr10 (surface->color_management.description) :
+               meta_wayland_color_description_needs_conversion (surface->color_management.description)))
             goto reconcile;
 
           if (!meta_wayland_surface_can_scanout_untransformed (surface,

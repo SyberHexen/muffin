@@ -18,11 +18,12 @@
  */
 
 /*
- * A subset of wp_color_management_v1: parametric image descriptions only,
- * with the named primaries and transfer functions advertised below. Muffin
- * does no color conversion; the descriptions let clients tell it what their
- * content is (so an HDR10 surface can be shown on an output in the BT.2100
- * color mode as is), and let it tell clients what each output expects.
+ * A subset of wp_color_management_v1: parametric image descriptions with
+ * the named primaries and transfer functions advertised below, and the
+ * Windows scRGB and BT.2100 ones. The descriptions let clients tell Muffin
+ * what their content is, which it converts to the colors windows are
+ * composited in (see meta-color-transform.c), and let it tell clients what
+ * each output expects.
  */
 
 #include "config.h"
@@ -31,6 +32,7 @@
 
 #include "wayland/meta-wayland-color-management.h"
 
+#include "backends/meta-color-transform.h"
 #include "backends/meta-logical-monitor.h"
 #include "backends/meta-monitor.h"
 #include "backends/meta-monitor-manager-private.h"
@@ -55,6 +57,11 @@ struct _MetaWaylandColorDescription
   double min_lum;
   double max_lum;
   double reference_lum;
+
+  /* For the extended linear transfer function: what 1.0 is, in cd/m², when
+   * it is absolute (Windows scRGB); 0 when it is relative to reference
+   * white, at max_lum */
+  double linear_unit;
 
   /* Target color volume (mastering display), when given */
   gboolean has_target_primaries;
@@ -151,7 +158,9 @@ is_supported_tf (uint32_t tf)
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB:
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22:
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886:
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR:
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ:
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG:
       return TRUE;
     default:
       return FALSE;
@@ -170,6 +179,11 @@ get_default_luminances (uint32_t  tf,
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ:
       *min_lum = 0.005;
       *max_lum = 10000.0;
+      *reference_lum = 203.0;
+      break;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG:
+      *min_lum = 0.005;
+      *max_lum = 1000.0;
       *reference_lum = 203.0;
       break;
     case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886:
@@ -218,15 +232,112 @@ meta_wayland_color_description_unref (MetaWaylandColorDescription *description)
     g_free (description);
 }
 
-/* The peak luminance of the content, in cd/m², for tone mapping: its
+/* HDR content: PQ or HLG, or linear content brighter than reference
+ * white */
+gboolean
+meta_wayland_color_description_is_hdr (MetaWaylandColorDescription *description)
+{
+  if (!description)
+    return FALSE;
+
+  switch (description->tf)
+    {
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ:
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG:
+      return TRUE;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR:
+      return description->linear_unit > 0 ||
+             description->max_lum > description->reference_lum;
+    default:
+      return FALSE;
+    }
+}
+
+/**
+ * meta_wayland_color_description_get_conversion: (skip)
+ * @decode: (out): how the content is encoded
+ * @to_bt709: (out): its linear RGB to linear BT.709, row major
+ * @unit_nits: (out): what 1.0 of linear content is, in cd/m², or 0
+ * @unit_relative: (out): when @unit_nits is 0, what 1.0 of linear content
+ *   is relative to SDR white
+ *
+ * Returns: whether the content of @description needs converting to the
+ *   colors windows are composited in: everything but SDR content with
+ *   BT.709 primaries, which is composited as is
+ */
+gboolean
+meta_wayland_color_description_get_conversion (MetaWaylandColorDescription *description,
+                                               MetaColorTransformDecode    *decode,
+                                               float                        to_bt709[9],
+                                               float                       *unit_nits,
+                                               float                       *unit_relative)
+{
+  const int32_t *primaries;
+
+  if (!description)
+    return FALSE;
+
+  switch (description->tf)
+    {
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB:
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22:
+      if (description->primaries == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB)
+        return FALSE;
+      *decode = META_COLOR_TRANSFORM_DECODE_SDR;
+      break;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886:
+      *decode = META_COLOR_TRANSFORM_DECODE_BT1886;
+      break;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR:
+      *decode = META_COLOR_TRANSFORM_DECODE_LINEAR;
+      break;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ:
+      *decode = META_COLOR_TRANSFORM_DECODE_PQ;
+      break;
+    case WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG:
+      *decode = META_COLOR_TRANSFORM_DECODE_HLG;
+      break;
+    default:
+      return FALSE;
+    }
+
+  primaries = get_named_primaries (description->primaries);
+  if (!primaries)
+    return FALSE;
+  meta_color_transform_get_to_bt709 (primaries, to_bt709);
+
+  *unit_nits = description->linear_unit;
+  *unit_relative = description->reference_lum > 0 ?
+    description->max_lum / description->reference_lum : 1.0;
+
+  return TRUE;
+}
+
+gboolean
+meta_wayland_color_description_needs_conversion (MetaWaylandColorDescription *description)
+{
+  MetaColorTransformDecode decode;
+  float to_bt709[9];
+  float unit_nits, unit_relative;
+
+  return meta_wayland_color_description_get_conversion (description, &decode,
+                                                        to_bt709, &unit_nits,
+                                                        &unit_relative);
+}
+
+/* The peak luminance of HDR content, in cd/m², for tone mapping: its
  * maximum content light level, else the peak of its mastering display, else
- * 1000, the most common HDR10 grading target */
+ * 1000, the most common HDR10 grading target; 0 (not tone mapped) for SDR
+ * content, and for HLG, which is shown for the display's peak instead */
 float
 meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description)
 {
-  if (description && description->max_cll > 0)
+  if (!meta_wayland_color_description_is_hdr (description) ||
+      description->tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG)
+    return 0.0f;
+  if (description->max_cll > 0)
     return description->max_cll;
-  if (description && description->has_target_luminance &&
+  if (description->has_target_luminance &&
       description->target_max_lum > 0)
     return description->target_max_lum;
   return 1000.0f;
@@ -1110,14 +1221,39 @@ color_manager_create_parametric_creator (struct wl_client   *client,
                                   creator_params_destructor);
 }
 
+/* Windows scRGB: BT.709 primaries, extended linear, 1.0 at 80 cd/m², up to
+ * 125.0 at 10000 cd/m²; reference white taken as 203 cd/m² */
 static void
 color_manager_create_windows_scrgb (struct wl_client   *client,
                                     struct wl_resource *resource,
                                     uint32_t            id)
 {
-  wl_resource_post_error (resource,
-                          WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
-                          "windows_scrgb is not supported");
+  g_autoptr (MetaWaylandColorDescription) description = NULL;
+
+  description = color_description_new (WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR,
+                                        WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+  description->min_lum = 0.0;
+  description->max_lum = 10000.0;
+  description->reference_lum = 203.0;
+  description->linear_unit = 80.0;
+
+  create_image_description (client, wl_resource_get_version (resource),
+                            id, description, FALSE);
+}
+
+/* Windows BT.2100: HDR10, reference white taken as 203 cd/m² */
+static void
+color_manager_create_windows_bt2100 (struct wl_client   *client,
+                                     struct wl_resource *resource,
+                                     uint32_t            id)
+{
+  g_autoptr (MetaWaylandColorDescription) description = NULL;
+
+  description = color_description_new (WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
+                                        WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+
+  create_image_description (client, wl_resource_get_version (resource),
+                            id, description, FALSE);
 }
 
 static void
@@ -1140,6 +1276,7 @@ static const struct wp_color_manager_v1_interface color_manager_interface = {
   .create_parametric_creator = color_manager_create_parametric_creator,
   .create_windows_scrgb = color_manager_create_windows_scrgb,
   .get_image_description = color_manager_get_image_description,
+  .create_windows_bt2100 = color_manager_create_windows_bt2100,
 };
 
 static void
@@ -1164,6 +1301,11 @@ color_manager_bind (struct wl_client *client,
                                               WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
   wp_color_manager_v1_send_supported_feature (resource,
                                               WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
+  wp_color_manager_v1_send_supported_feature (resource,
+                                              WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
+  if (version >= WP_COLOR_MANAGER_V1_CREATE_WINDOWS_BT2100_SINCE_VERSION)
+    wp_color_manager_v1_send_supported_feature (resource,
+                                                WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_BT2100);
 
   wp_color_manager_v1_send_supported_tf_named (resource,
                                                WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
@@ -1173,6 +1315,10 @@ color_manager_bind (struct wl_client *client,
                                                WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
   wp_color_manager_v1_send_supported_tf_named (resource,
                                                WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+  wp_color_manager_v1_send_supported_tf_named (resource,
+                                               WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+  wp_color_manager_v1_send_supported_tf_named (resource,
+                                               WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
 
   wp_color_manager_v1_send_supported_primaries_named (resource,
                                                       WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
@@ -1239,16 +1385,16 @@ typedef struct
 static Passthrough passthrough;
 
 static gboolean
-surface_tree_is_hdr10 (MetaWaylandSurface *surface)
+surface_tree_is_hdr (MetaWaylandSurface *surface)
 {
   MetaWaylandSurface *subsurface;
 
-  if (meta_wayland_color_description_is_hdr10 (surface->color_management.description))
+  if (meta_wayland_color_description_is_hdr (surface->color_management.description))
     return TRUE;
 
   META_WAYLAND_SURFACE_FOREACH_SUBSURFACE (surface, subsurface)
     {
-      if (surface_tree_is_hdr10 (subsurface))
+      if (surface_tree_is_hdr (subsurface))
         return TRUE;
     }
 
@@ -1371,7 +1517,7 @@ meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows)
       gboolean wanted;
 
       wanted = window && window->surface &&
-               surface_tree_is_hdr10 (window->surface);
+               surface_tree_is_hdr (window->surface);
 
       for (k = meta_logical_monitor_get_monitors (logical_monitor); k; k = k->next)
         {

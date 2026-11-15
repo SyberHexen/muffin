@@ -95,6 +95,24 @@ static const char color_functions[] =
   "  return pow ((c1 + c2 * p) / (1.0 + c3 * p), vec3 (m2));\n"
   "}\n"
   "\n"
+  /* ITU-R BT.2100 HLG: signal -> display light as a fraction of 10000
+   * cd/m², for a display peaking at @peak cd/m² (inverse OETF, then the
+   * OOTF on BT.2020 luminance, with the system gamma for that peak from
+   * ITU-R BT.2390: 1.2 at 1000 cd/m²).  HLG is made to be shown this way at
+   * any peak, so it is not tone mapped. */
+  "vec3 meta_cc_hlg_to_linear (vec3 e, float peak)\n"
+  "{\n"
+  "  const float a = 0.17883277;\n"
+  "  const float b = 0.28466892;\n"
+  "  const float c = 0.55991073;\n"
+  "  vec3 v = clamp (e, 0.0, 1.0);\n"
+  "  vec3 s = mix (v * v / 3.0, (exp ((v - c) / a) + b) / 12.0,\n"
+  "                step (vec3 (0.5), v));\n"
+  "  float y = dot (s, vec3 (0.2627, 0.6780, 0.0593));\n"
+  "  float gamma = 1.2 * pow (1.111, log2 (peak / 1000.0));\n"
+  "  return s * (pow (max (y, 1e-6), gamma - 1.0) * (peak / 10000.0));\n"
+  "}\n"
+  "\n"
   /* ITU-R BT.2390 EETF: tone map luminance from a source peak to a display
    * peak (cd/m², 0 for unknown: no tone mapping), in the PQ domain, on the
    * largest component so hues are kept.  Values are fractions of 10000
@@ -310,28 +328,66 @@ meta_color_transform_get_composite_to_pq_lut_snippet (void)
   return snippet;
 }
 
+/* How the content of each MetaColorTransformDecode becomes linear light, as
+ * a fraction of 10000 cd/m²: SDR content has SDR white at the white level
+ * the view composites with, linear content its 1.0 at meta_cc_content_unit
+ * cd/m², PQ content is absolute, HLG content is shown for the display's
+ * peak (1000 cd/m² if unknown) */
+static const char * const decode_bodies[] = {
+  [META_COLOR_TRANSFORM_DECODE_SDR] =
+    "  vec3 l = meta_cc_sdr_to_linear (c) * (meta_cc_sdr_white / 10000.0);\n",
+  [META_COLOR_TRANSFORM_DECODE_BT1886] =
+    "  vec3 l = sign (c) * pow (abs (c), vec3 (2.4)) *\n"
+    "           (meta_cc_sdr_white / 10000.0);\n",
+  [META_COLOR_TRANSFORM_DECODE_LINEAR] =
+    "  vec3 l = c * (meta_cc_content_unit / 10000.0);\n",
+  [META_COLOR_TRANSFORM_DECODE_PQ] =
+    "  vec3 l = meta_cc_pq_to_linear (c);\n",
+  [META_COLOR_TRANSFORM_DECODE_HLG] =
+    "  vec3 l = meta_cc_hlg_to_linear (c, meta_cc_dst_peak > 0.0 ?\n"
+    "                                     meta_cc_dst_peak : 1000.0);\n",
+};
+
 /**
- * meta_color_transform_get_pq_to_composite_snippet: (skip)
+ * meta_color_transform_get_to_composite_snippet: (skip)
+ * @decode: how the content is encoded
  *
- * Returns: (transfer none): a fragment snippet converting the PQ / BT.2020
- *   content of an HDR10 surface to the SDR encoding views are composited in
+ * The snippet tone maps the content (see meta_color_transform_set_peaks()),
+ * converts its primaries to BT.709 (see meta_color_transform_set_content())
+ * and brings it into range on SDR outputs (see
+ * meta_color_transform_set_gamut_clip()).
+ *
+ * Returns: (transfer none): a fragment snippet converting the content of a
+ *   surface to the SDR encoding views are composited in
  */
 CoglSnippet *
-meta_color_transform_get_pq_to_composite_snippet (void)
+meta_color_transform_get_to_composite_snippet (MetaColorTransformDecode decode)
 {
-  static CoglSnippet *snippet = NULL;
+  static CoglSnippet *snippets[META_COLOR_TRANSFORM_N_DECODES] = { NULL };
 
-  if (!snippet)
-    snippet = create_snippet ("uniform float meta_cc_gamut_clip;\n",
-      "  vec3 l = meta_cc_tone_map (meta_cc_pq_to_linear (c),\n"
-      "                             meta_cc_src_peak, meta_cc_dst_peak) *\n"
-      "           (10000.0 / meta_cc_sdr_white);\n"
-      "  l = meta_cc_bt2020_to_bt709 * l;\n"
-      "  if (meta_cc_gamut_clip > 0.5)\n"
-      "    l = meta_cc_clip_to_sdr (l);\n"
-      "  c = meta_cc_linear_to_sdr (l);\n");
+  g_return_val_if_fail (decode < META_COLOR_TRANSFORM_N_DECODES, NULL);
 
-  return snippet;
+  if (!snippets[decode])
+    {
+      g_autofree char *body =
+        g_strconcat (decode_bodies[decode],
+                     "  l = meta_cc_tone_map (l, meta_cc_src_peak,\n"
+                     "                        meta_cc_dst_peak) *\n"
+                     "      (10000.0 / meta_cc_sdr_white);\n"
+                     "  l = meta_cc_content_to_bt709 * l;\n"
+                     "  if (meta_cc_gamut_clip > 0.5)\n"
+                     "    l = meta_cc_clip_to_sdr (l);\n"
+                     "  c = meta_cc_linear_to_sdr (l);\n",
+                     NULL);
+
+      snippets[decode] =
+        create_snippet ("uniform float meta_cc_gamut_clip;\n"
+                        "uniform float meta_cc_content_unit;\n"
+                        "uniform mat3 meta_cc_content_to_bt709;\n",
+                        body);
+    }
+
+  return snippets[decode];
 }
 
 /**
@@ -376,6 +432,117 @@ meta_color_transform_set_peaks (CoglPipeline *pipeline,
                                 cogl_pipeline_get_uniform_location (pipeline,
                                                                     "meta_cc_dst_peak"),
                                 dst_peak);
+}
+
+/**
+ * meta_color_transform_set_content: (skip)
+ * @pipeline: a pipeline with a to composite snippet
+ * @to_bt709: the content's linear RGB to linear BT.709, row major
+ * @unit_nits: what 1.0 of linear content is, in cd/m²
+ *
+ * Describes the content the snippet converts.  Every pipeline using the
+ * snippet needs it set.
+ */
+void
+meta_color_transform_set_content (CoglPipeline *pipeline,
+                                  const float   to_bt709[9],
+                                  float         unit_nits)
+{
+  cogl_pipeline_set_uniform_matrix (pipeline,
+                                    cogl_pipeline_get_uniform_location (pipeline,
+                                                                        "meta_cc_content_to_bt709"),
+                                    3, 1, TRUE, to_bt709);
+  cogl_pipeline_set_uniform_1f (pipeline,
+                                cogl_pipeline_get_uniform_location (pipeline,
+                                                                    "meta_cc_content_unit"),
+                                unit_nits);
+}
+
+/* RGB to XYZ for primaries given as x, y of red, green, blue and white */
+static void
+rgb_to_xyz (const double p[8],
+            double       m[3][3])
+{
+  double xyz[3][3], w[3], s[3], inv[3][3], det;
+  int i, j;
+
+  for (i = 0; i < 3; i++)
+    {
+      xyz[0][i] = p[2 * i] / p[2 * i + 1];
+      xyz[1][i] = 1.0;
+      xyz[2][i] = (1.0 - p[2 * i] - p[2 * i + 1]) / p[2 * i + 1];
+    }
+  w[0] = p[6] / p[7];
+  w[1] = 1.0;
+  w[2] = (1.0 - p[6] - p[7]) / p[7];
+
+  det = xyz[0][0] * (xyz[1][1] * xyz[2][2] - xyz[1][2] * xyz[2][1]) -
+        xyz[0][1] * (xyz[1][0] * xyz[2][2] - xyz[1][2] * xyz[2][0]) +
+        xyz[0][2] * (xyz[1][0] * xyz[2][1] - xyz[1][1] * xyz[2][0]);
+  inv[0][0] = (xyz[1][1] * xyz[2][2] - xyz[1][2] * xyz[2][1]) / det;
+  inv[0][1] = (xyz[0][2] * xyz[2][1] - xyz[0][1] * xyz[2][2]) / det;
+  inv[0][2] = (xyz[0][1] * xyz[1][2] - xyz[0][2] * xyz[1][1]) / det;
+  inv[1][0] = (xyz[1][2] * xyz[2][0] - xyz[1][0] * xyz[2][2]) / det;
+  inv[1][1] = (xyz[0][0] * xyz[2][2] - xyz[0][2] * xyz[2][0]) / det;
+  inv[1][2] = (xyz[0][2] * xyz[1][0] - xyz[0][0] * xyz[1][2]) / det;
+  inv[2][0] = (xyz[1][0] * xyz[2][1] - xyz[1][1] * xyz[2][0]) / det;
+  inv[2][1] = (xyz[0][1] * xyz[2][0] - xyz[0][0] * xyz[2][1]) / det;
+  inv[2][2] = (xyz[0][0] * xyz[1][1] - xyz[0][1] * xyz[1][0]) / det;
+
+  for (i = 0; i < 3; i++)
+    s[i] = inv[i][0] * w[0] + inv[i][1] * w[1] + inv[i][2] * w[2];
+
+  for (i = 0; i < 3; i++)
+    for (j = 0; j < 3; j++)
+      m[i][j] = xyz[i][j] * s[j];
+}
+
+/**
+ * meta_color_transform_get_to_bt709: (skip)
+ * @primaries: x, y of red, green, blue and white, times 1000000
+ * @to_bt709: (out): linear RGB in @primaries to linear BT.709, row major
+ *
+ * The white points are taken to be the same (D65), as they are for every
+ * named set of primaries clients can use.
+ */
+void
+meta_color_transform_get_to_bt709 (const int32_t primaries[8],
+                                   float         to_bt709[9])
+{
+  static const double bt709[8] = {
+    0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290,
+  };
+  double p[8], src[3][3], dst[3][3], inv[3][3], det;
+  int i, j, k;
+
+  for (i = 0; i < 8; i++)
+    p[i] = primaries[i] / 1000000.0;
+
+  rgb_to_xyz (p, src);
+  rgb_to_xyz (bt709, dst);
+
+  det = dst[0][0] * (dst[1][1] * dst[2][2] - dst[1][2] * dst[2][1]) -
+        dst[0][1] * (dst[1][0] * dst[2][2] - dst[1][2] * dst[2][0]) +
+        dst[0][2] * (dst[1][0] * dst[2][1] - dst[1][1] * dst[2][0]);
+  inv[0][0] = (dst[1][1] * dst[2][2] - dst[1][2] * dst[2][1]) / det;
+  inv[0][1] = (dst[0][2] * dst[2][1] - dst[0][1] * dst[2][2]) / det;
+  inv[0][2] = (dst[0][1] * dst[1][2] - dst[0][2] * dst[1][1]) / det;
+  inv[1][0] = (dst[1][2] * dst[2][0] - dst[1][0] * dst[2][2]) / det;
+  inv[1][1] = (dst[0][0] * dst[2][2] - dst[0][2] * dst[2][0]) / det;
+  inv[1][2] = (dst[0][2] * dst[1][0] - dst[0][0] * dst[1][2]) / det;
+  inv[2][0] = (dst[1][0] * dst[2][1] - dst[1][1] * dst[2][0]) / det;
+  inv[2][1] = (dst[0][1] * dst[2][0] - dst[0][0] * dst[2][1]) / det;
+  inv[2][2] = (dst[0][0] * dst[1][1] - dst[0][1] * dst[1][0]) / det;
+
+  for (i = 0; i < 3; i++)
+    for (j = 0; j < 3; j++)
+      {
+        double v = 0.0;
+
+        for (k = 0; k < 3; k++)
+          v += inv[i][k] * src[k][j];
+        to_bt709[i * 3 + j] = v;
+      }
 }
 
 /**

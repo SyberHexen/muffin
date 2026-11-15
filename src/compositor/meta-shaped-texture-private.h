@@ -39,6 +39,10 @@ void meta_shaped_texture_set_snippet (MetaShapedTexture *stex,
                                       CoglSnippet       *snippet);
 void meta_shaped_texture_set_color_snippet (MetaShapedTexture *stex,
                                             CoglSnippet       *snippet);
+void meta_shaped_texture_set_content_colors (MetaShapedTexture *stex,
+                                             const float        to_bt709[9],
+                                             float              unit_nits,
+                                             float              unit_relative);
 void meta_shaped_texture_set_content_peak (MetaShapedTexture *stex,
                                            float              nits);
 void meta_shaped_texture_set_fallback_size (MetaShapedTexture *stex,
