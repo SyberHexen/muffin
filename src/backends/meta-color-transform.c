@@ -95,6 +95,30 @@ static const char color_functions[] =
   "  return pow ((c1 + c2 * p) / (1.0 + c3 * p), vec3 (m2));\n"
   "}\n"
   "\n"
+  /* ITU-R BT.2390 EETF: tone map luminance from a source peak to a display
+   * peak (cd/m², 0 for unknown: no tone mapping), in the PQ domain, on the
+   * largest component so hues are kept.  Values are fractions of 10000
+   * cd/m². */
+  "vec3 meta_cc_tone_map (vec3 l, float src_peak, float dst_peak)\n"
+  "{\n"
+  "  float m = max (max (l.r, l.g), l.b);\n"
+  "  if (dst_peak <= 0.0 || src_peak <= dst_peak || m <= 0.0)\n"
+  "    return l;\n"
+  "  float src = meta_cc_linear_to_pq (vec3 (src_peak / 10000.0)).x;\n"
+  "  float max_lum = meta_cc_linear_to_pq (vec3 (dst_peak / 10000.0)).x / src;\n"
+  "  float ks = max (1.5 * max_lum - 0.5, 0.0);\n"
+  "  float e = min (meta_cc_linear_to_pq (vec3 (m)).x / src, 1.0);\n"
+  "  if (e <= ks)\n"
+  "    return l;\n"
+  "  float t = (e - ks) / (1.0 - ks);\n"
+  "  float t2 = t * t;\n"
+  "  float t3 = t2 * t;\n"
+  "  float e2 = (2.0 * t3 - 3.0 * t2 + 1.0) * ks +\n"
+  "             (t3 - 2.0 * t2 + t) * (1.0 - ks) +\n"
+  "             (-2.0 * t3 + 3.0 * t2) * max_lum;\n"
+  "  return l * (meta_cc_pq_to_linear (vec3 (e2 * src)).x / m);\n"
+  "}\n"
+  "\n"
   /* Linear BT.709 <-> BT.2020 primaries, derived from their chromaticities
    * and D65 (as in ITU-R BT.2087) and exact inverses of each other, so HDR10
    * content survives the round trip; column major */
@@ -167,6 +191,8 @@ create_snippet (const char *body)
   declarations =
     g_strdup_printf ("%s\n"
                      "uniform float meta_cc_sdr_white;\n"
+                     "uniform float meta_cc_src_peak;\n"
+                     "uniform float meta_cc_dst_peak;\n"
                      "vec3 meta_cc_sdr_to_linear (vec3 e)\n"
                      "{\n"
                      "  return meta_cc_%s_to_linear (e);\n"
@@ -223,7 +249,8 @@ meta_color_transform_get_pq_to_composite_snippet (void)
 
   if (!snippet)
     snippet = create_snippet (
-      "  vec3 l = meta_cc_pq_to_linear (c) *\n"
+      "  vec3 l = meta_cc_tone_map (meta_cc_pq_to_linear (c),\n"
+      "                             meta_cc_src_peak, meta_cc_dst_peak) *\n"
       "           (10000.0 / meta_cc_sdr_white);\n"
       "  c = meta_cc_linear_to_sdr (meta_cc_bt2020_to_bt709 * l);\n");
 
@@ -248,4 +275,28 @@ meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
   location = cogl_pipeline_get_uniform_location (pipeline,
                                                  "meta_cc_sdr_white");
   cogl_pipeline_set_uniform_1f (pipeline, location, nits);
+}
+
+/**
+ * meta_color_transform_set_peaks: (skip)
+ * @pipeline: a pipeline with the PQ to composite snippet
+ * @src_peak: the peak luminance of the content, in cd/m²
+ * @dst_peak: the peak luminance of the display, in cd/m², 0 if unknown
+ *
+ * Sets the luminances HDR content is tone mapped between; with an unknown
+ * display peak, or content within it, it is not tone mapped.
+ */
+void
+meta_color_transform_set_peaks (CoglPipeline *pipeline,
+                                float         src_peak,
+                                float         dst_peak)
+{
+  cogl_pipeline_set_uniform_1f (pipeline,
+                                cogl_pipeline_get_uniform_location (pipeline,
+                                                                    "meta_cc_src_peak"),
+                                src_peak);
+  cogl_pipeline_set_uniform_1f (pipeline,
+                                cogl_pipeline_get_uniform_location (pipeline,
+                                                                    "meta_cc_dst_peak"),
+                                dst_peak);
 }
