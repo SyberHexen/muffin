@@ -46,6 +46,7 @@
 #include <stdlib.h>
 
 #include "backends/edid.h"
+#include "backends/meta-color-transform.h"
 #include "backends/meta-backend-private.h"
 #include "backends/meta-crtc.h"
 #include "backends/meta-logical-monitor.h"
@@ -62,6 +63,7 @@
 #include "meta/meta-x11-errors.h"
 
 #ifdef HAVE_WAYLAND
+#include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-xwayland.h"
 #endif
 
@@ -1810,6 +1812,24 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
           g_variant_builder_add (&monitor_properties_builder, "{sv}",
                                  "supported-color-modes",
                                  g_variant_builder_end (&modes_builder));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "hdr-auto-switch",
+                                 g_variant_new_boolean (
+                                   meta_monitor_get_hdr_auto_switch (monitor)));
+#ifdef HAVE_WAYLAND
+          /* The BT.2100 color mode set by HDR passthrough, not the
+           * configuration: clients should not store it */
+          if (meta_is_wayland_compositor ())
+            g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                   "hdr-auto-switched",
+                                   g_variant_new_boolean (
+                                     meta_wayland_color_management_is_auto_switched (
+                                       meta_monitor_get_connector (monitor))));
+#endif
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "sdr-white-level",
+                                 g_variant_new_uint32 ((uint32_t) roundf (
+                                   meta_monitor_get_sdr_white_level (monitor))));
         }
 
       is_builtin = meta_monitor_is_laptop_panel (monitor);
@@ -2168,7 +2188,9 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   uint32_t rgb_range;
   uint32_t color_format;
   uint32_t color_mode;
+  gboolean hdr_auto_switch;
   uint32_t vrr_mode;
+  uint32_t sdr_white_level;
 
   g_variant_get (monitor_config_variant, "(ss@a{sv})",
                  &connector,
@@ -2258,6 +2280,21 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   else
     {
       color_mode = meta_monitor_get_color_mode (monitor);
+#ifdef HAVE_WAYLAND
+      /* The BT.2100 color mode HDR passthrough switched to is not the
+       * configured one: keep the configuration in the default mode, or it
+       * would be stored and the monitor would stay in HDR. Passthrough
+       * switches it again while it is still wanted. */
+      if (meta_is_wayland_compositor () &&
+          meta_wayland_color_management_is_auto_switched (connector))
+        color_mode = META_OUTPUT_COLOR_MODE_DEFAULT;
+#endif
+    }
+
+  if (!g_variant_lookup (properties_variant, "hdr-auto-switch", "b",
+                         &hdr_auto_switch))
+    hdr_auto_switch = meta_monitor_get_hdr_auto_switch (monitor);
+
   if (g_variant_lookup (properties_variant, "vrr-mode", "u", &vrr_mode))
     {
       if (vrr_mode > META_OUTPUT_VRR_MODE_LAST ||
@@ -2274,6 +2311,23 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
       vrr_mode = meta_monitor_get_vrr_mode (monitor);
     }
 
+  if (g_variant_lookup (properties_variant, "sdr-white-level", "u",
+                        &sdr_white_level))
+    {
+      if (sdr_white_level != 0 &&
+          (sdr_white_level < META_MIN_SDR_WHITE_LEVEL ||
+           sdr_white_level > META_MAX_SDR_WHITE_LEVEL))
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "SDR white level %u cd/m² requested, must be between "
+                       "%d and %d", sdr_white_level,
+                       META_MIN_SDR_WHITE_LEVEL, META_MAX_SDR_WHITE_LEVEL);
+          return NULL;
+        }
+    }
+  else
+    {
+      sdr_white_level = meta_monitor_get_main_output (monitor)->sdr_white_level;
     }
 
   monitor_spec = meta_monitor_spec_clone (meta_monitor_get_spec (monitor));
@@ -2289,7 +2343,9 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
     .rgb_range = rgb_range,
     .color_format = color_format,
     .color_mode = color_mode,
+    .no_hdr_auto_switch = !hdr_auto_switch,
     .vrr_mode = vrr_mode,
+    .sdr_white_level = sdr_white_level,
   };
 
   return monitor_config;

@@ -112,6 +112,11 @@ struct _MetaOutput
   unsigned int supported_color_formats;
   MetaOutputColorMode color_mode;
   unsigned int supported_color_modes;
+  /* HDR: whether HDR passthrough may not switch the output to the BT.2100
+   * color mode by itself, and the luminance SDR white is shown at in that
+   * color mode, in cd/m² (0 for the default) */
+  gboolean no_hdr_auto_switch;
+  unsigned int sdr_white_level;
 
   /* Variable refresh rate: whether the sink can take it, and when to use it */
   gboolean vrr_capable;
@@ -141,6 +146,8 @@ META_EXPORT_TEST
 MetaGpu * meta_output_get_gpu (MetaOutput *output);
 
 const char * meta_output_get_name (MetaOutput *output);
+
+float meta_output_get_sdr_white_level (MetaOutput *output);
 
 META_EXPORT_TEST
 void meta_output_assign_crtc (MetaOutput *output,
