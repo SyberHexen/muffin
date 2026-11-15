@@ -59,6 +59,13 @@ struct _MetaRendererView
   MetaOutputColorMode color_mode;
   float sdr_white_level;
   float hdr_peak_luminance;
+
+  /* The gamma ramp of the CRTC, applied in the blit in the BT.2100 color
+   * mode; size 0 for none */
+  size_t gamma_size;
+  unsigned short *gamma_red;
+  unsigned short *gamma_green;
+  unsigned short *gamma_blue;
 };
 
 G_DEFINE_TYPE (MetaRendererView, meta_renderer_view,
@@ -86,6 +93,40 @@ float
 meta_renderer_view_get_hdr_peak_luminance (MetaRendererView *view)
 {
   return view->hdr_peak_luminance;
+}
+
+static void
+clear_gamma (MetaRendererView *view)
+{
+  g_clear_pointer (&view->gamma_red, g_free);
+  g_clear_pointer (&view->gamma_green, g_free);
+  g_clear_pointer (&view->gamma_blue, g_free);
+  view->gamma_size = 0;
+}
+
+/**
+ * meta_renderer_view_set_gamma: (skip)
+ * @size: entries of the ramps, 0 for none
+ *
+ * Sets the gamma ramp of the view's CRTC, which a view in the BT.2100
+ * color mode applies before converting to PQ.
+ */
+void
+meta_renderer_view_set_gamma (MetaRendererView     *view,
+                              size_t                size,
+                              const unsigned short *red,
+                              const unsigned short *green,
+                              const unsigned short *blue)
+{
+  clear_gamma (view);
+  if (size > 1)
+    {
+      view->gamma_size = size;
+      view->gamma_red = g_memdup2 (red, size * sizeof (*red));
+      view->gamma_green = g_memdup2 (green, size * sizeof (*green));
+      view->gamma_blue = g_memdup2 (blue, size * sizeof (*blue));
+    }
+  clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
 }
 
 static void
@@ -145,10 +186,27 @@ meta_renderer_view_setup_offscreen_blit_pipeline (ClutterStageView *view,
   /* The view was composited in the SDR encoding; the output takes PQ */
   if (META_RENDERER_VIEW (view)->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
     {
-      cogl_pipeline_add_snippet (pipeline,
-                                 meta_color_transform_get_composite_to_pq_snippet ());
+      MetaRendererView *renderer_view = META_RENDERER_VIEW (view);
+
+      /* A gamma ramp (Night Light, color correction) is for the SDR signal:
+       * apply it before converting to PQ instead of on the hardware */
+      if (renderer_view->gamma_size > 1)
+        {
+          cogl_pipeline_add_snippet (pipeline,
+                                     meta_color_transform_get_composite_to_pq_lut_snippet ());
+          meta_color_transform_set_lut (pipeline,
+                                        renderer_view->gamma_size,
+                                        renderer_view->gamma_red,
+                                        renderer_view->gamma_green,
+                                        renderer_view->gamma_blue);
+        }
+      else
+        {
+          cogl_pipeline_add_snippet (pipeline,
+                                     meta_color_transform_get_composite_to_pq_snippet ());
+        }
       meta_color_transform_set_sdr_white (pipeline,
-                                          META_RENDERER_VIEW (view)->sdr_white_level);
+                                          renderer_view->sdr_white_level);
     }
 }
 
@@ -246,6 +304,14 @@ meta_renderer_view_init (MetaRendererView *view)
 }
 
 static void
+meta_renderer_view_finalize (GObject *object)
+{
+  clear_gamma (META_RENDERER_VIEW (object));
+
+  G_OBJECT_CLASS (meta_renderer_view_parent_class)->finalize (object);
+}
+
+static void
 meta_renderer_view_class_init (MetaRendererViewClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
@@ -258,6 +324,7 @@ meta_renderer_view_class_init (MetaRendererViewClass *klass)
   view_class->transform_rect_to_onscreen =
     meta_renderer_view_transform_rect_to_onscreen;
 
+  object_class->finalize = meta_renderer_view_finalize;
   object_class->get_property = meta_renderer_view_get_property;
   object_class->set_property = meta_renderer_view_set_property;
 
