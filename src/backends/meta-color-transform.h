@@ -50,6 +50,9 @@ void meta_color_transform_set_peaks (CoglPipeline *pipeline,
                                      float         src_peak,
                                      float         dst_peak);
 
+void meta_color_transform_set_gamut_clip (CoglPipeline *pipeline,
+                                          gboolean      clip);
+
 void meta_color_transform_set_lut (CoglPipeline         *pipeline,
                                    size_t                size,
                                    const unsigned short *red,
