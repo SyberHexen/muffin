@@ -3732,12 +3732,12 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
   /* A view in the BT.2100 color mode applies the CRTC's gamma ramp */
   if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
     {
-      MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
-      const uint16_t *red, *green, *blue;
+      g_autofree uint16_t *red = NULL;
+      g_autofree uint16_t *green = NULL;
+      g_autofree uint16_t *blue = NULL;
       int size;
 
-      if (meta_kms_crtc_get_wanted_gamma (kms_crtc, &size,
-                                          &red, &green, &blue))
+      if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
         meta_renderer_view_set_gamma (view, size, red, green, blue);
     }
 

@@ -452,9 +452,9 @@ generate_gamma_ramp_string (size_t          size,
   return g_string_free (string, FALSE);
 }
 
-/* Whether @crtc drives an output in the BT.2100 color mode */
-static gboolean
-crtc_is_bt2100 (MetaCrtc *crtc)
+/* The output @crtc drives, if any */
+static MetaOutput *
+get_crtc_output (MetaCrtc *crtc)
 {
   GList *l;
 
@@ -462,12 +462,11 @@ crtc_is_bt2100 (MetaCrtc *crtc)
     {
       MetaOutput *output = l->data;
 
-      if (meta_output_get_assigned_crtc (output) == crtc &&
-          output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
-        return TRUE;
+      if (meta_output_get_assigned_crtc (output) == crtc)
+        return output;
     }
 
-  return FALSE;
+  return NULL;
 }
 
 /* Hand @crtc's gamma ramp to the views it shows, which apply it in the
@@ -500,6 +499,55 @@ update_view_gamma (MetaMonitorManager *manager,
   clutter_actor_queue_redraw (meta_backend_get_stage (backend));
 }
 
+/* Applies @output's gamma ramp (the clients', with its color correction):
+ * on the hardware, or in the view in the BT.2100 color mode */
+static void
+apply_output_gamma (MetaMonitorManager *manager,
+                    MetaOutput         *output)
+{
+  MetaBackend *backend = meta_monitor_manager_get_backend (manager);
+  MetaKms *kms = meta_backend_native_get_kms (META_BACKEND_NATIVE (backend));
+  MetaCrtc *crtc = meta_output_get_assigned_crtc (output);
+  g_autofree uint16_t *red = NULL;
+  g_autofree uint16_t *green = NULL;
+  g_autofree uint16_t *blue = NULL;
+  g_autoptr (MetaKmsFeedback) kms_feedback = NULL;
+  MetaKmsUpdate *kms_update;
+  int size;
+
+  if (!crtc)
+    return;
+
+  if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+    {
+      if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
+        update_view_gamma (manager, crtc, size, red, green, blue);
+      else
+        update_view_gamma (manager, crtc, 0, NULL, NULL, NULL);
+      return;
+    }
+
+  kms_update = meta_kms_ensure_pending_update (kms);
+  if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
+    meta_kms_crtc_set_gamma (meta_crtc_kms_get_kms_crtc (crtc), kms_update,
+                             size, red, green, blue);
+  else
+    meta_kms_crtc_set_neutral_gamma (meta_crtc_kms_get_kms_crtc (crtc),
+                                     kms_update);
+
+  kms_feedback = meta_kms_post_pending_update_sync (kms);
+  if (meta_kms_feedback_get_result (kms_feedback) != META_KMS_FEEDBACK_PASSED)
+    g_warning ("Failed to set CRTC gamma: %s",
+               meta_kms_feedback_get_error (kms_feedback)->message);
+}
+
+static void
+meta_monitor_manager_kms_apply_color_correction (MetaMonitorManager *manager,
+                                                 MetaOutput         *output)
+{
+  apply_output_gamma (manager, output);
+}
+
 static void
 meta_monitor_manager_kms_set_crtc_gamma (MetaMonitorManager *manager,
                                          MetaCrtc           *crtc,
@@ -522,10 +570,11 @@ meta_monitor_manager_kms_set_crtc_gamma (MetaMonitorManager *manager,
   kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
   meta_kms_crtc_set_wanted_gamma (kms_crtc, size, red, green, blue);
 
-  /* The hardware ramp would bend the PQ signal: the view applies it */
-  if (crtc_is_bt2100 (crtc))
+  /* With the output's color correction on top; in the BT.2100 color mode
+   * the view applies it, as the hardware ramp would bend the PQ signal */
+  if (get_crtc_output (crtc))
     {
-      update_view_gamma (manager, crtc, size, red, green, blue);
+      apply_output_gamma (manager, get_crtc_output (crtc));
       return;
     }
 
@@ -731,6 +780,8 @@ meta_monitor_manager_kms_class_init (MetaMonitorManagerKmsClass *klass)
   manager_class->set_power_save_mode = meta_monitor_manager_kms_set_power_save_mode;
   manager_class->get_crtc_gamma = meta_monitor_manager_kms_get_crtc_gamma;
   manager_class->set_crtc_gamma = meta_monitor_manager_kms_set_crtc_gamma;
+  manager_class->apply_color_correction =
+    meta_monitor_manager_kms_apply_color_correction;
   manager_class->is_transform_handled = meta_monitor_manager_kms_is_transform_handled;
   manager_class->calculate_monitor_mode_scale = meta_monitor_manager_kms_calculate_monitor_mode_scale;
   manager_class->calculate_supported_scales = meta_monitor_manager_kms_calculate_supported_scales;
