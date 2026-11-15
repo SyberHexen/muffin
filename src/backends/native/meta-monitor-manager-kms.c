@@ -51,9 +51,11 @@
 #include "backends/meta-crtc.h"
 #include "backends/meta-monitor-config-manager.h"
 #include "backends/meta-output.h"
+#include "backends/meta-renderer-view.h"
 #include "backends/native/meta-backend-native.h"
 #include "backends/native/meta-crtc-kms.h"
 #include "backends/native/meta-gpu-kms.h"
+#include "backends/native/meta-kms-crtc.h"
 #include "backends/native/meta-kms-update.h"
 #include "backends/native/meta-kms.h"
 #include "backends/native/meta-launcher.h"
@@ -363,8 +365,23 @@ meta_monitor_manager_kms_get_crtc_gamma (MetaMonitorManager  *manager,
 {
   MetaKmsCrtc *kms_crtc;
   const MetaKmsCrtcState *crtc_state;
+  const uint16_t *wanted_red, *wanted_green, *wanted_blue;
+  int wanted_size;
 
   kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
+
+  /* What was asked for, not the neutral ramp of an output in the BT.2100
+   * color mode */
+  if (meta_kms_crtc_get_wanted_gamma (kms_crtc, &wanted_size,
+                                      &wanted_red, &wanted_green, &wanted_blue))
+    {
+      *size = wanted_size;
+      *red = g_memdup2 (wanted_red, *size * sizeof **red);
+      *green = g_memdup2 (wanted_green, *size * sizeof **green);
+      *blue = g_memdup2 (wanted_blue, *size * sizeof **blue);
+      return;
+    }
+
   crtc_state = meta_kms_crtc_get_current_state (kms_crtc);
 
   *size = crtc_state->gamma.size;
@@ -435,6 +452,54 @@ generate_gamma_ramp_string (size_t          size,
   return g_string_free (string, FALSE);
 }
 
+/* Whether @crtc drives an output in the BT.2100 color mode */
+static gboolean
+crtc_is_bt2100 (MetaCrtc *crtc)
+{
+  GList *l;
+
+  for (l = meta_gpu_get_outputs (meta_crtc_get_gpu (crtc)); l; l = l->next)
+    {
+      MetaOutput *output = l->data;
+
+      if (meta_output_get_assigned_crtc (output) == crtc &&
+          output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+/* Hand @crtc's gamma ramp to the views it shows, which apply it in the
+ * BT.2100 color mode */
+static void
+update_view_gamma (MetaMonitorManager *manager,
+                   MetaCrtc           *crtc,
+                   gsize               size,
+                   unsigned short     *red,
+                   unsigned short     *green,
+                   unsigned short     *blue)
+{
+  MetaBackend *backend = meta_monitor_manager_get_backend (manager);
+  MetaRenderer *renderer = meta_backend_get_renderer (backend);
+  GList *l;
+
+  for (l = meta_renderer_get_views (renderer); l; l = l->next)
+    {
+      ClutterStageView *view = l->data;
+      CoglFramebuffer *onscreen = clutter_stage_view_get_onscreen (view);
+
+      if (!META_IS_RENDERER_VIEW (view) || !cogl_is_onscreen (onscreen) ||
+          meta_onscreen_native_get_crtc (COGL_ONSCREEN (onscreen)) != crtc)
+        continue;
+
+      meta_renderer_view_set_gamma (META_RENDERER_VIEW (view),
+                                    size, red, green, blue);
+    }
+
+  clutter_actor_queue_redraw (meta_backend_get_stage (backend));
+}
+
 static void
 meta_monitor_manager_kms_set_crtc_gamma (MetaMonitorManager *manager,
                                          MetaCrtc           *crtc,
@@ -454,9 +519,18 @@ meta_monitor_manager_kms_set_crtc_gamma (MetaMonitorManager *manager,
   gamma_ramp_string = generate_gamma_ramp_string (size, red, green, blue);
   g_debug ("Setting CRTC (%ld) gamma to %s", crtc->crtc_id, gamma_ramp_string);
 
+  kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
+  meta_kms_crtc_set_wanted_gamma (kms_crtc, size, red, green, blue);
+
+  /* The hardware ramp would bend the PQ signal: the view applies it */
+  if (crtc_is_bt2100 (crtc))
+    {
+      update_view_gamma (manager, crtc, size, red, green, blue);
+      return;
+    }
+
   kms_update = meta_kms_ensure_pending_update (kms);
 
-  kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
   meta_kms_crtc_set_gamma (kms_crtc, kms_update,
                            size, red, green, blue);
 
