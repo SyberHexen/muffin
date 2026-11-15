@@ -375,11 +375,20 @@ meta_screen_cast_monitor_stream_src_record_to_buffer (MetaScreenCastStreamSrc  *
   ClutterStage *stage;
   MetaMonitor *monitor;
   MetaLogicalMonitor *logical_monitor;
+  float scale;
 
   stage = get_stage (monitor_src);
   monitor = get_monitor (monitor_src);
   logical_monitor = meta_monitor_get_logical_monitor (monitor);
-  clutter_stage_capture_into (stage, FALSE, &logical_monitor->rect, data);
+
+  /* The stream is the monitor at its scale (see get_specs) */
+  if (meta_is_stage_views_scaled ())
+    scale = logical_monitor->scale;
+  else
+    scale = 1.0;
+
+  clutter_stage_capture_into (stage, FALSE, &logical_monitor->rect, scale,
+                              data);
 
   return TRUE;
 }
