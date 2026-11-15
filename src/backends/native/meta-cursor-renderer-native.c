@@ -926,6 +926,51 @@ gpus_have_hw_cursor_sprite (MetaCursorSprite *cursor_sprite,
   return TRUE;
 }
 
+/* Whether the cursor is over an output in the BT.2100 color mode, where an
+ * SDR cursor image on the cursor plane would be shown unconverted */
+static gboolean
+cursor_over_bt2100_output (MetaCursorRenderer *renderer,
+                           MetaCursorSprite   *cursor_sprite)
+{
+  MetaCursorRendererNative *cursor_renderer_native =
+    META_CURSOR_RENDERER_NATIVE (renderer);
+  MetaCursorRendererNativePrivate *priv =
+    meta_cursor_renderer_native_get_instance_private (cursor_renderer_native);
+  MetaMonitorManager *monitor_manager =
+    meta_backend_get_monitor_manager (priv->backend);
+  graphene_rect_t cursor_rect;
+  GList *l;
+
+  cursor_rect = meta_cursor_renderer_calculate_rect (renderer, cursor_sprite);
+
+  for (l = meta_monitor_manager_get_logical_monitors (monitor_manager);
+       l;
+       l = l->next)
+    {
+      MetaLogicalMonitor *logical_monitor = l->data;
+      graphene_rect_t logical_monitor_rect =
+        meta_rectangle_to_graphene_rect (&logical_monitor->rect);
+      GList *l_mon;
+
+      if (!graphene_rect_intersection (&cursor_rect,
+                                       &logical_monitor_rect,
+                                       NULL))
+        continue;
+
+      for (l_mon = meta_logical_monitor_get_monitors (logical_monitor);
+           l_mon;
+           l_mon = l_mon->next)
+        {
+          MetaOutput *output = meta_monitor_get_main_output (l_mon->data);
+
+          if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+            return TRUE;
+        }
+    }
+
+  return FALSE;
+}
+
 static gboolean
 should_have_hw_cursor (MetaCursorRenderer *renderer,
                        MetaCursorSprite   *cursor_sprite,
@@ -946,6 +991,10 @@ should_have_hw_cursor (MetaCursorRenderer *renderer,
     return FALSE;
 
   if (!crtcs_has_cursor_planes (renderer, cursor_sprite))
+    return FALSE;
+
+  /* Drawn by the compositor instead, which converts it */
+  if (cursor_over_bt2100_output (renderer, cursor_sprite))
     return FALSE;
 
   texture = meta_cursor_sprite_get_cogl_texture (cursor_sprite);
