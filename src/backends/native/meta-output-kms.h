@@ -42,6 +42,12 @@ gboolean meta_output_kms_can_clone (MetaOutput *output,
 
 MetaKmsConnector * meta_output_kms_get_kms_connector (MetaOutput *output);
 
+gboolean meta_output_kms_get_gamma (MetaOutput  *output,
+                                    int         *size_out,
+                                    uint16_t   **red_out,
+                                    uint16_t   **green_out,
+                                    uint16_t   **blue_out);
+
 uint32_t meta_output_kms_get_connector_id (MetaOutput *output);
 
 GBytes * meta_output_kms_read_edid (MetaOutput *output);

@@ -22,6 +22,7 @@
 
 #include <glib-object.h>
 
+#include "backends/meta-color-correction.h"
 #include "backends/meta-backend-types.h"
 #include "backends/meta-gpu.h"
 #include "core/util-private.h"
@@ -124,6 +125,9 @@ struct _MetaOutput
 
   /* The display's luminance from its EDID, in cd/m², 0 if not given; and
    * the peak luminance the user set instead, 0 if none */
+  /* Applied on top of the gamma ramp clients set (native backend) */
+  MetaColorCorrection color_correction;
+
   float edid_max_luminance;
   float edid_max_frame_avg;
   float edid_min_luminance;

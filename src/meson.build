@@ -220,6 +220,8 @@ muffin_sources = [
   'backends/meta-remote-access-controller.c',
   'backends/meta-renderer.c',
   'backends/meta-renderer.h',
+  'backends/meta-color-correction.c',
+  'backends/meta-color-correction.h',
   'backends/meta-color-transform.c',
   'backends/meta-color-transform.h',
   'backends/meta-renderer-view.c',
