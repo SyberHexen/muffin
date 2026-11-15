@@ -44,6 +44,9 @@ CLUTTER_EXPORT
 int64_t clutter_stage_get_frame_counter (ClutterStage *stage);
 
 CLUTTER_EXPORT
+gboolean clutter_stage_view_is_redraw_queued (ClutterStageView *view);
+
+CLUTTER_EXPORT
 void clutter_actor_paint_as_clone_source (ClutterActor        *actor,
                                           ClutterPaintContext *paint_context);
 

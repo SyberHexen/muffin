@@ -182,11 +182,28 @@ static void
 sync_cursor_state (MetaScreenCastMonitorStreamSrc *monitor_src)
 {
   MetaScreenCastStreamSrc *src = META_SCREEN_CAST_STREAM_SRC (monitor_src);
-  ClutterStage *stage = get_stage (monitor_src);
+  MetaBackend *backend = get_backend (monitor_src);
+  MetaRenderer *renderer = meta_backend_get_renderer (backend);
+  MetaLogicalMonitor *logical_monitor =
+    meta_monitor_get_logical_monitor (get_monitor (monitor_src));
+  MetaRectangle logical_monitor_layout =
+    meta_logical_monitor_get_layout (logical_monitor);
   MetaScreenCastRecordFlag flags;
+  GList *l;
 
-  if (clutter_stage_is_redraw_queued (stage))
-    return;
+  /* A frame is recorded when the monitor's views are painted; any other
+   * view being redrawn (another monitor showing a video) does not repaint
+   * this one, so the cursor would only move with that monitor's frames */
+  for (l = meta_renderer_get_views (renderer); l; l = l->next)
+    {
+      ClutterStageView *view = l->data;
+      MetaRectangle view_layout;
+
+      clutter_stage_view_get_layout (view, &view_layout);
+      if (meta_rectangle_overlap (&logical_monitor_layout, &view_layout) &&
+          clutter_stage_view_is_redraw_queued (view))
+        return;
+    }
 
   if (meta_screen_cast_stream_src_pending_follow_up_frame (src))
     return;
