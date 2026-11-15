@@ -36,6 +36,11 @@ float meta_color_transform_get_sdr_white_nits (void);
 
 CoglSnippet * meta_color_transform_get_composite_to_pq_snippet (void);
 
+/* Entries of the gamma ramp the composite to PQ LUT snippet applies */
+#define META_COLOR_TRANSFORM_LUT_SIZE 256
+
+CoglSnippet * meta_color_transform_get_composite_to_pq_lut_snippet (void);
+
 CoglSnippet * meta_color_transform_get_pq_to_composite_snippet (void);
 
 void meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
@@ -44,5 +49,11 @@ void meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
 void meta_color_transform_set_peaks (CoglPipeline *pipeline,
                                      float         src_peak,
                                      float         dst_peak);
+
+void meta_color_transform_set_lut (CoglPipeline         *pipeline,
+                                   size_t                size,
+                                   const unsigned short *red,
+                                   const unsigned short *green,
+                                   const unsigned short *blue);
 
 #endif /* META_COLOR_TRANSFORM_H */
