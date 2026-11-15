@@ -23,6 +23,7 @@
 #include "backends/native/meta-kms-connector-private.h"
 
 #include <errno.h>
+#include <math.h>
 
 #include "backends/native/meta-gpu-kms.h"
 #include "backends/native/meta-kms-crtc.h"
@@ -61,6 +62,10 @@ struct _MetaKmsConnector
   gboolean have_colorspace_bt2020;
   uint32_t hdr_metadata_prop_id;
   uint32_t hdr_metadata_blob_id;
+  /* The display's luminance for the HDR metadata, in cd/m², 0 if unknown;
+   * and the values the current blob was made with */
+  float hdr_max_luminance, hdr_max_frame_avg, hdr_min_luminance;
+  float blob_max_luminance, blob_max_frame_avg, blob_min_luminance;
 
   uint32_t color_format_prop_id;
   uint64_t color_format_values[META_OUTPUT_COLOR_FORMAT_LAST + 1];
@@ -252,18 +257,46 @@ meta_kms_connector_get_supported_color_modes (MetaKmsConnector *connector)
   return 1 << META_OUTPUT_COLOR_MODE_DEFAULT;
 }
 
-/* HDR10 static metadata.  Without content metadata, describe a 1000 nit
- * BT.2020 mastering display, the most common HDR10 grading target. */
+/* The display's luminance, in cd/m² (0 if unknown), to describe in the HDR
+ * metadata: Muffin tone maps HDR content to its peak, so the display is
+ * told no content goes past it and need not tone map again. */
+void
+meta_kms_connector_set_hdr_luminance (MetaKmsConnector *connector,
+                                      float             max_luminance,
+                                      float             max_frame_avg,
+                                      float             min_luminance)
+{
+  connector->hdr_max_luminance = max_luminance;
+  connector->hdr_max_frame_avg = max_frame_avg;
+  connector->hdr_min_luminance = min_luminance;
+}
+
+/* HDR10 static metadata.  For a display of known peak luminance, describe
+ * the content as mastered on it; otherwise as mastered on a 1000 nit
+ * BT.2020 display, the most common HDR10 grading target. */
 static uint32_t
 ensure_hdr_metadata_blob (MetaKmsConnector *connector,
                           int               fd)
 {
   struct hdr_output_metadata metadata = { 0 };
   struct hdr_metadata_infoframe *info = &metadata.hdmi_metadata_type1;
+  float max = connector->hdr_max_luminance;
+  float avg = connector->hdr_max_frame_avg;
+  float min = connector->hdr_min_luminance;
   int ret;
 
-  if (connector->hdr_metadata_blob_id)
+  if (connector->hdr_metadata_blob_id &&
+      connector->blob_max_luminance == max &&
+      connector->blob_max_frame_avg == avg &&
+      connector->blob_min_luminance == min)
     return connector->hdr_metadata_blob_id;
+
+  /* A blob still set on the connector stays valid until replaced */
+  if (connector->hdr_metadata_blob_id)
+    {
+      drmModeDestroyPropertyBlob (fd, connector->hdr_metadata_blob_id);
+      connector->hdr_metadata_blob_id = 0;
+    }
 
   metadata.metadata_type = 0;           /* HDMI_STATIC_METADATA_TYPE1 */
   info->eotf = 2;                       /* HDMI_EOTF_SMPTE_ST2084 */
@@ -277,11 +310,26 @@ ensure_hdr_metadata_blob (MetaKmsConnector *connector,
   info->display_primaries[2].y = 2300;
   info->white_point.x = 15635;
   info->white_point.y = 16450;
-  info->max_display_mastering_luminance = 1000;   /* cd/m² */
-  info->min_display_mastering_luminance = 50;     /* 0.0001 cd/m² */
-  info->max_cll = 1000;
-  info->max_fall = 400;
+  if (max > 0)
+    {
+      info->max_display_mastering_luminance = (uint16_t) MIN (roundf (max), 65535);
+      info->max_cll = info->max_display_mastering_luminance;
+      info->max_fall = avg > 0 ? (uint16_t) MIN (roundf (avg), 65535)
+                               : info->max_cll;
+    }
+  else
+    {
+      info->max_display_mastering_luminance = 1000;   /* cd/m² */
+      info->max_cll = 1000;
+      info->max_fall = 400;
+    }
+  /* in 0.0001 cd/m² */
+  info->min_display_mastering_luminance =
+    min > 0 ? (uint16_t) MIN (roundf (min * 10000), 65535) : 50;
 
+  connector->blob_max_luminance = max;
+  connector->blob_max_frame_avg = avg;
+  connector->blob_min_luminance = min;
   ret = drmModeCreatePropertyBlob (fd, &metadata, sizeof (metadata),
                                    &connector->hdr_metadata_blob_id);
   if (ret != 0)
