@@ -41,6 +41,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <gbm.h>
+#include <math.h>
 #include <gio/gio.h>
 #include <glib-object.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@
 #include "backends/meta-gles3.h"
 #include "backends/meta-logical-monitor.h"
 #include "backends/meta-output.h"
+#include "backends/meta-color-transform.h"
 #include "backends/meta-renderer-view.h"
 #include "backends/native/meta-crtc-kms.h"
 #include "backends/native/meta-drm-buffer-dumb.h"
@@ -3753,6 +3755,35 @@ should_force_shadow_fb (MetaRendererNative *renderer_native,
   return FALSE;
 }
 
+/* Test switch: MUFFIN_SDR_EDID_COLORS=1 shows SDR colors on a wide gamut
+ * display in their own (BT.709) colors, converted to the display's primaries
+ * from its EDID, instead of letting the display stretch them over its whole
+ * gamut */
+static gboolean
+output_wants_sdr_colors_mapped (MetaOutput *output)
+{
+  static const double bt709[6] = { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06 };
+  static int enabled = -1;
+  int i;
+
+  if (enabled < 0)
+    enabled = g_strcmp0 (g_getenv ("MUFFIN_SDR_EDID_COLORS"), "1") == 0;
+
+  if (!enabled ||
+      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100 ||
+      !output->has_edid_primaries)
+    return FALSE;
+
+  /* A display with (about) BT.709 primaries needs no conversion */
+  for (i = 0; i < 6; i++)
+    {
+      if (fabs (output->edid_primaries[i] - bt709[i]) > 0.01)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 static MetaRendererView *
 meta_renderer_native_create_view (MetaRenderer       *renderer,
                                   MetaLogicalMonitor *logical_monitor,
@@ -3778,6 +3809,7 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
   int onscreen_height;
   MetaRectangle view_layout;
   MetaRendererView *view;
+  gboolean map_to_display;
   GError *error = NULL;
 
   crtc_config = crtc->config;
@@ -3799,17 +3831,23 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                                              logical_monitor,
                                              output,
                                              crtc);
+  map_to_display = output_wants_sdr_colors_mapped (output);
+
   /* An output in the BT.2100 color mode is composited in its SDR encoding, in
    * half floats so HDR content can go past SDR white, and converted to PQ
    * when the view is blitted to the output (see meta-color-transform.c). */
   if (view_transform != META_MONITOR_TRANSFORM_NORMAL ||
-      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100 ||
+      map_to_display)
     {
       CoglPixelFormat offscreen_format = COGL_PIXEL_FORMAT_ANY;
       int offscreen_width;
       int offscreen_height;
 
-      if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+      /* Half floats for the color conversion of an SDR view too, so it adds
+       * no banding */
+      if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100 ||
+          map_to_display)
         offscreen_format = COGL_PIXEL_FORMAT_RGBA_FP_16161616_PRE;
 
       if (meta_monitor_transform_is_rotated (view_transform))
@@ -3881,6 +3919,15 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
 
       if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
         meta_renderer_view_set_gamma (view, size, red, green, blue);
+    }
+
+  if (map_to_display)
+    {
+      float to_display[9];
+
+      meta_color_transform_get_bt709_to_display (output->edid_primaries,
+                                                 to_display);
+      meta_renderer_view_set_to_display (view, to_display);
     }
 
   meta_onscreen_native_set_view (onscreen, view);
