@@ -45,6 +45,17 @@ meta_output_get_sdr_white_level (MetaOutput *output)
                                  : meta_color_transform_get_sdr_white_nits ();
 }
 
+/* The display's peak luminance in cd/m²: the one the user set, or its
+ * EDID's; 0 if neither is known */
+float
+meta_output_get_hdr_peak_luminance (MetaOutput *output)
+{
+  if (output->hdr_peak_luminance)
+    return output->hdr_peak_luminance;
+
+  return output->edid_max_luminance;
+}
+
 const char *
 meta_output_get_name (MetaOutput *output)
 {

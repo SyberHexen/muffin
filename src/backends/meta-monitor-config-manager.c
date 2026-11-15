@@ -316,6 +316,7 @@ assign_monitor_crtc (MetaMonitor         *monitor,
     .color_mode = data->monitor_config->color_mode,
     .no_hdr_auto_switch = data->monitor_config->no_hdr_auto_switch,
     .sdr_white_level = data->monitor_config->sdr_white_level,
+    .hdr_peak_luminance = data->monitor_config->hdr_peak_luminance,
   };
 
   g_ptr_array_add (data->crtc_infos, crtc_info);
@@ -678,6 +679,7 @@ create_monitor_config (MetaMonitor     *monitor,
     .color_mode = meta_monitor_get_color_mode (monitor),
     .no_hdr_auto_switch = !meta_monitor_get_hdr_auto_switch (monitor),
     .sdr_white_level = meta_monitor_get_main_output (monitor)->sdr_white_level,
+    .hdr_peak_luminance = meta_monitor_get_main_output (monitor)->hdr_peak_luminance,
   };
 
   return monitor_config;
@@ -1196,6 +1198,7 @@ clone_monitor_config_list (GList *monitor_configs_in)
         .color_mode = monitor_config_in->color_mode,
         .no_hdr_auto_switch = monitor_config_in->no_hdr_auto_switch,
         .sdr_white_level = monitor_config_in->sdr_white_level,
+        .hdr_peak_luminance = monitor_config_in->hdr_peak_luminance,
       };
       monitor_configs_out =
         g_list_append (monitor_configs_out, monitor_config_out);

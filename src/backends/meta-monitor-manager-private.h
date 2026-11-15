@@ -98,6 +98,7 @@ struct _MetaOutputInfo
   MetaOutputColorMode color_mode;
   gboolean no_hdr_auto_switch;
   unsigned int sdr_white_level;
+  unsigned int hdr_peak_luminance;
 };
 
 #define META_TYPE_MONITOR_MANAGER            (meta_monitor_manager_get_type ())

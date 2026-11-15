@@ -247,6 +247,7 @@ apply_crtc_assignments (MetaMonitorManager *manager,
         output->color_mode = output_info->color_mode;
       output->no_hdr_auto_switch = output_info->no_hdr_auto_switch;
       output->sdr_white_level = output_info->sdr_white_level;
+      output->hdr_peak_luminance = output_info->hdr_peak_luminance;
     }
 
   /* Disable outputs not mentioned in the list */
