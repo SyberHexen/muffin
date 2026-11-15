@@ -30,6 +30,7 @@
 #include "backends/meta-cursor-tracker-private.h"
 #include "backends/meta-logical-monitor.h"
 #include "backends/meta-monitor.h"
+#include "backends/meta-renderer-view.h"
 #include "backends/meta-screen-cast-monitor-stream.h"
 #include "backends/meta-screen-cast-session.h"
 #include "backends/meta-stage-private.h"
@@ -407,6 +408,37 @@ meta_screen_cast_monitor_stream_src_record_to_framebuffer (MetaScreenCastStreamS
     view_scale = meta_logical_monitor_get_scale (logical_monitor);
   else
     view_scale = 1.0;
+
+  /* A view in the BT.2100 color mode holds HDR content past SDR white (and
+   * colors past BT.709), which copying to the stream would clip: paint the
+   * monitor into the stream instead, which tone maps it to SDR as
+   * screenshots and memory streams are */
+  for (l = meta_renderer_get_views (renderer); l; l = l->next)
+    {
+      MetaRendererView *view = l->data;
+      MetaRectangle view_layout;
+
+      clutter_stage_view_get_layout (CLUTTER_STAGE_VIEW (view), &view_layout);
+      if (meta_rectangle_overlap (&logical_monitor_layout, &view_layout) &&
+          meta_renderer_view_get_color_mode (view) == META_OUTPUT_COLOR_MODE_BT2100)
+        {
+          MetaScreenCastStream *stream =
+            meta_screen_cast_stream_src_get_stream (src);
+          ClutterPaintFlag paint_flags = CLUTTER_PAINT_FLAG_NONE;
+
+          if (meta_screen_cast_stream_get_cursor_mode (stream) !=
+              META_SCREEN_CAST_CURSOR_MODE_EMBEDDED)
+            paint_flags |= CLUTTER_PAINT_FLAG_NO_CURSORS;
+
+          clutter_stage_paint_to_framebuffer (CLUTTER_STAGE (get_stage (monitor_src)),
+                                              framebuffer,
+                                              &logical_monitor_layout,
+                                              view_scale,
+                                              paint_flags);
+          cogl_framebuffer_finish (framebuffer);
+          return TRUE;
+        }
+    }
 
   for (l = meta_renderer_get_views (renderer); l; l = l->next)
     {
