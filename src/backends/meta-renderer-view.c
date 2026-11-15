@@ -43,6 +43,7 @@ enum
 
   PROP_TRANSFORM,
   PROP_COLOR_MODE,
+  PROP_SDR_WHITE_LEVEL,
 
   PROP_LAST
 };
@@ -55,6 +56,7 @@ struct _MetaRendererView
 
   MetaMonitorTransform transform;
   MetaOutputColorMode color_mode;
+  float sdr_white_level;
 };
 
 G_DEFINE_TYPE (MetaRendererView, meta_renderer_view,
@@ -70,6 +72,12 @@ MetaOutputColorMode
 meta_renderer_view_get_color_mode (MetaRendererView *view)
 {
   return view->color_mode;
+}
+
+float
+meta_renderer_view_get_sdr_white_level (MetaRendererView *view)
+{
+  return view->sdr_white_level;
 }
 
 static void
@@ -128,8 +136,12 @@ meta_renderer_view_setup_offscreen_blit_pipeline (ClutterStageView *view,
 
   /* The view was composited in the SDR encoding; the output takes PQ */
   if (META_RENDERER_VIEW (view)->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
-    cogl_pipeline_add_snippet (pipeline,
-                               meta_color_transform_get_composite_to_pq_snippet ());
+    {
+      cogl_pipeline_add_snippet (pipeline,
+                                 meta_color_transform_get_composite_to_pq_snippet ());
+      meta_color_transform_set_sdr_white (pipeline,
+                                          META_RENDERER_VIEW (view)->sdr_white_level);
+    }
 }
 
 static void
@@ -178,6 +190,9 @@ meta_renderer_view_get_property (GObject    *object,
     case PROP_COLOR_MODE:
       g_value_set_uint (value, view->color_mode);
       break;
+    case PROP_SDR_WHITE_LEVEL:
+      g_value_set_float (value, view->sdr_white_level);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -199,6 +214,10 @@ meta_renderer_view_set_property (GObject      *object,
       break;
     case PROP_COLOR_MODE:
       view->color_mode = g_value_get_uint (value);
+      clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
+      break;
+    case PROP_SDR_WHITE_LEVEL:
+      view->sdr_white_level = g_value_get_float (value);
       clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
       break;
     default:
@@ -250,6 +269,18 @@ meta_renderer_view_class_init (MetaRendererViewClass *klass)
                        G_PARAM_READWRITE |
                        G_PARAM_CONSTRUCT_ONLY |
                        G_PARAM_STATIC_STRINGS);
+
+  obj_props[PROP_SDR_WHITE_LEVEL] =
+    g_param_spec_float ("sdr-white-level",
+                        "SDR white level",
+                        "Luminance of SDR white in the BT.2100 color mode, "
+                        "in cd/m²",
+                        META_MIN_SDR_WHITE_LEVEL,
+                        META_MAX_SDR_WHITE_LEVEL,
+                        203.0f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_CONSTRUCT_ONLY |
+                        G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (object_class, PROP_LAST, obj_props);
 }
