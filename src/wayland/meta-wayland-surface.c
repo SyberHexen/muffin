@@ -846,10 +846,10 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
   if (state->has_new_color_description)
     {
       MetaWindow *window;
-      gboolean was_hdr10;
+      gboolean was_hdr;
 
-      was_hdr10 =
-        meta_wayland_color_description_is_hdr10 (surface->color_management.description);
+      was_hdr =
+        meta_wayland_color_description_is_hdr (surface->color_management.description);
       g_clear_pointer (&surface->color_management.description,
                        meta_wayland_color_description_unref);
       surface->color_management.description =
@@ -859,14 +859,14 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
       window = meta_wayland_surface_get_toplevel_window (surface);
       if (window)
         {
-          gboolean is_hdr10 =
-            meta_wayland_color_description_is_hdr10 (surface->color_management.description);
+          gboolean is_hdr =
+            meta_wayland_color_description_is_hdr (surface->color_management.description);
 
-          if (is_hdr10 != was_hdr10)
-            g_message ("HDR passthrough: \"%s\" %s HDR10 content",
+          if (is_hdr != was_hdr)
+            g_message ("HDR passthrough: \"%s\" %s HDR content",
                        meta_window_get_title (window) ?
                        meta_window_get_title (window) : "(untitled)",
-                       is_hdr10 ? "shows" : "no longer shows");
+                       is_hdr ? "shows" : "no longer shows");
 
           meta_display_queue_check_fullscreen (window->display);
         }
