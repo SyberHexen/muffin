@@ -43,6 +43,12 @@
 #include "driver/gl/cogl-clip-stack-gl-private.h"
 #include "driver/gl/cogl-buffer-gl-private.h"
 
+/* A sized internal format: with plain GL_RGBA drivers may store half float
+ * textures with 8 bits per channel, clipping everything above 1.0 */
+#ifndef GL_RGBA16F
+#define GL_RGBA16F 0x881A
+#endif
+
 static gboolean
 _cogl_driver_gl_real_context_init (CoglContext *context)
 {
@@ -289,25 +295,25 @@ _cogl_driver_pixel_format_to_gl (CoglContext     *context,
 
     case COGL_PIXEL_FORMAT_RGBA_FP_16161616:
     case COGL_PIXEL_FORMAT_RGBA_FP_16161616_PRE:
-      glintformat = GL_RGBA;
+      glintformat = GL_RGBA16F;
       glformat = GL_RGBA;
       gltype = GL_HALF_FLOAT;
       break;
     case COGL_PIXEL_FORMAT_BGRA_FP_16161616:
     case COGL_PIXEL_FORMAT_BGRA_FP_16161616_PRE:
-      glintformat = GL_RGBA;
+      glintformat = GL_RGBA16F;
       glformat = GL_BGRA;
       gltype = GL_HALF_FLOAT;
       break;
     case COGL_PIXEL_FORMAT_ARGB_FP_16161616:
     case COGL_PIXEL_FORMAT_ARGB_FP_16161616_PRE:
-      glintformat = GL_RGBA;
+      glintformat = GL_RGBA16F;
       glformat = GL_BGRA;
       gltype = GL_HALF_FLOAT;
       break;
     case COGL_PIXEL_FORMAT_ABGR_FP_16161616:
     case COGL_PIXEL_FORMAT_ABGR_FP_16161616_PRE:
-      glintformat = GL_RGBA;
+      glintformat = GL_RGBA16F;
       glformat = GL_RGBA;
       gltype = GL_HALF_FLOAT;
       break;

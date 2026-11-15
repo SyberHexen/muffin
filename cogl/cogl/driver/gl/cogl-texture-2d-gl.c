@@ -137,7 +137,7 @@ allocate_with_size (CoglTexture2D *tex_2d,
   GLenum gl_texture;
 
   internal_format =
-    _cogl_texture_determine_internal_format (tex, COGL_PIXEL_FORMAT_ANY);
+    _cogl_texture_determine_internal_format (tex, loader->src.sized.format);
 
   if (!_cogl_texture_2d_gl_can_create (ctx,
                                        width,

@@ -117,6 +117,25 @@ cogl_texture_2d_new_with_size (CoglContext *ctx,
                                int height);
 
 /**
+ * cogl_texture_2d_new_with_format: (skip)
+ * @ctx: A #CoglContext
+ * @width: Width of the texture to allocate
+ * @height: Height of the texture to allocate
+ * @format: The internal format, for example
+ *   %COGL_PIXEL_FORMAT_RGBA_FP_16161616_PRE for a half float texture
+ *
+ * Like cogl_texture_2d_new_with_size(), but with the given internal format
+ * instead of one picked from the texture's components.
+ *
+ * Returns: (transfer full): A new #CoglTexture2D object with no storage yet allocated.
+ */
+COGL_EXPORT CoglTexture2D *
+cogl_texture_2d_new_with_format (CoglContext     *ctx,
+                                 int              width,
+                                 int              height,
+                                 CoglPixelFormat  format);
+
+/**
  * cogl_texture_2d_new_from_file: (skip)
  * @ctx: A #CoglContext
  * @filename: the file to load

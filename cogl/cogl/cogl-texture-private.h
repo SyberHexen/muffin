@@ -165,6 +165,8 @@ typedef struct _CoglTextureLoader
       int width;
       int height;
       int depth; /* for 3d textures */
+      CoglPixelFormat format; /* COGL_PIXEL_FORMAT_ANY to pick from the
+                                 components */
     } sized;
     struct {
       CoglBitmap *bitmap;
