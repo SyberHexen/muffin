@@ -1820,6 +1820,21 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
                                    meta_monitor_get_main_output (monitor)->edid_max_luminance)));
         }
 
+      if (META_MONITOR_MANAGER_GET_CLASS (manager)->apply_color_correction)
+        {
+          double cc_values[META_COLOR_CORRECTION_N_VALUES];
+
+          meta_color_correction_to_values (
+            &meta_monitor_get_main_output (monitor)->color_correction,
+            cc_values);
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "color-correction",
+                                 g_variant_new_fixed_array (G_VARIANT_TYPE_DOUBLE,
+                                                            cc_values,
+                                                            META_COLOR_CORRECTION_N_VALUES,
+                                                            sizeof (double)));
+        }
+
       is_builtin = meta_monitor_is_laptop_panel (monitor);
       g_variant_builder_add (&monitor_properties_builder, "{sv}",
                              "is-builtin",
@@ -2876,6 +2891,60 @@ meta_monitor_manager_handle_get_crtc_gamma  (MetaDBusDisplayConfig *skeleton,
 }
 
 static gboolean
+meta_monitor_manager_handle_set_monitor_color_correction (MetaDBusDisplayConfig *skeleton,
+                                                          GDBusMethodInvocation *invocation,
+                                                          const char            *connector,
+                                                          GVariant              *values_v,
+                                                          MetaMonitorManager    *manager)
+{
+  MetaMonitorManagerClass *klass = META_MONITOR_MANAGER_GET_CLASS (manager);
+  MetaColorCorrection cc;
+  MetaMonitor *monitor;
+  MetaOutput *output;
+  const double *values;
+  gsize n_values;
+
+  if (!klass->apply_color_correction)
+    {
+      g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR,
+                                             G_DBUS_ERROR_NOT_SUPPORTED,
+                                             "Color correction is not supported");
+      return TRUE;
+    }
+
+  monitor = find_monitor_from_connector (manager, (char *) connector);
+  if (!monitor)
+    {
+      g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR,
+                                             G_DBUS_ERROR_INVALID_ARGS,
+                                             "Invalid connector '%s'",
+                                             connector);
+      return TRUE;
+    }
+
+  values = g_variant_get_fixed_array (values_v, &n_values, sizeof (double));
+  if (!meta_color_correction_from_values (&cc, values, n_values))
+    {
+      g_dbus_method_invocation_return_error (invocation, G_DBUS_ERROR,
+                                             G_DBUS_ERROR_INVALID_ARGS,
+                                             "Expected 9 values: brightness and "
+                                             "contrast from -1 to 1, gamma "
+                                             "from 0.1 to 10");
+      return TRUE;
+    }
+
+  output = meta_monitor_get_main_output (monitor);
+  output->color_correction = cc;
+  meta_color_correction_store (output->vendor, output->product,
+                               output->serial, &cc);
+  klass->apply_color_correction (manager, output);
+
+  meta_dbus_display_config_complete_set_monitor_color_correction (skeleton,
+                                                                  invocation);
+  return TRUE;
+}
+
+static gboolean
 meta_monitor_manager_handle_set_crtc_gamma  (MetaDBusDisplayConfig *skeleton,
                                              GDBusMethodInvocation *invocation,
                                              guint                  serial,
@@ -2978,6 +3047,10 @@ monitor_manager_setup_dbus_config_handlers (MetaMonitorManager *manager)
                            manager, 0);
   g_signal_connect_object (manager->display_config, "handle-get-crtc-gamma",
                            G_CALLBACK (meta_monitor_manager_handle_get_crtc_gamma),
+                           manager, 0);
+  g_signal_connect_object (manager->display_config,
+                           "handle-set-monitor-color-correction",
+                           G_CALLBACK (meta_monitor_manager_handle_set_monitor_color_correction),
                            manager, 0);
   g_signal_connect_object (manager->display_config, "handle-set-crtc-gamma",
                            G_CALLBACK (meta_monitor_manager_handle_set_crtc_gamma),

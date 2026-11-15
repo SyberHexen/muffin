@@ -253,6 +253,24 @@
     </method>
 
     <!--
+        SetMonitorColorCorrection:
+	@connector: the connector of the monitor
+	@values: brightness red, green, blue (-1 to 1, 0 neutral), contrast
+	         red, green, blue (-1 to 1, 0 neutral), gamma red, green, blue
+	         (0.1 to 10, 1 neutral), as NV-CONTROL color correction
+
+	Sets the color correction of the monitor, applied on top of the gamma
+	ramp set with SetCrtcGamma (Night Light), so neither undoes the other.
+	It takes effect at once, without changing the monitor configuration,
+	and is stored per display.  GetCurrentState reports it as the
+	"color-correction" monitor property.
+    -->
+    <method name="SetMonitorColorCorrection">
+      <arg name="connector" direction="in" type="s" />
+      <arg name="values" direction="in" type="ad" />
+    </method>
+
+    <!--
         PowerSaveMode:
 
 	Contains the current power saving mode for the screen, and
@@ -350,6 +368,7 @@
 	      it and the display is told it in the HDR metadata
 	    - "hdr-edid-peak-luminance" (u): the peak luminance the display's
 	      EDID gives, used when "hdr-peak-luminance" is 0; 0 if none
+	    - "color-correction" (ad): see SetMonitorColorCorrection
 	    - "max-screen-size" (ii): the maximum size a screen may have
 				      (absence of this means unlimited screen
 				      size)
