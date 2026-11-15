@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "backends/meta-screen-cast-window.h"
+#include "clutter/clutter-muffin.h"
 #include "compositor/compositor-private.h"
 #include "compositor/meta-cullable.h"
 #include "compositor/meta-shaped-texture-private.h"
@@ -1419,7 +1420,6 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
   CoglColor clear_color;
   float capture_scale;
   float width, height;
-  float x, y;
 
   if (meta_window_actor_is_destroyed (window_actor))
     return FALSE;
@@ -1436,8 +1436,6 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
 
   width = ceilf (width * capture_scale);
   height = ceilf (height * capture_scale);
-
-  clutter_actor_get_position (actor, &x, &y);
 
   cogl_color_init_from_4ub (&clear_color, 0, 0, 0, 0);
   cogl_framebuffer_clear (framebuffer, COGL_BUFFER_BIT_COLOR, &clear_color);
@@ -1459,10 +1457,11 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
 
   cogl_framebuffer_push_matrix (framebuffer);
   cogl_framebuffer_scale (framebuffer, capture_scale, capture_scale, 1);
-  cogl_framebuffer_translate (framebuffer, -x, -y, 0);
 
+  /* As a clone would: the window as it is, also while minimized or moved,
+   * scaled or faded by an effect */
   paint_context = clutter_paint_context_new_for_framebuffer (framebuffer);
-  clutter_actor_paint (actor, paint_context);
+  clutter_actor_paint_as_clone_source (actor, paint_context);
   clutter_paint_context_destroy (paint_context);
 
   cogl_framebuffer_pop_matrix (framebuffer);
