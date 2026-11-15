@@ -26,6 +26,7 @@
 #include <gio/gio.h>
 #include <string.h>
 
+#include "backends/meta-color-transform.h"
 #include "backends/meta-monitor-config-manager.h"
 #include "backends/meta-monitor-config-migration.h"
 
@@ -83,6 +84,8 @@
  *         <rgbrange>full</rgbrange>
  *         <colorformat>rgb</colorformat>
  *         <colormode>bt2100</colormode>
+ *         <hdrautoswitch>no</hdrautoswitch>
+ *         <sdrwhitelevel>240</sdrwhitelevel>
  *       </monitor>
  *       <presentation>yes</presentation>
  *     </logicalmonitor>
@@ -166,6 +169,8 @@ typedef enum
   STATE_MONITOR_RGB_RANGE,
   STATE_MONITOR_COLOR_FORMAT,
   STATE_MONITOR_COLOR_MODE,
+  STATE_MONITOR_HDR_AUTO_SWITCH,
+  STATE_MONITOR_SDR_WHITE_LEVEL,
   STATE_DISABLED,
 } ParserState;
 
@@ -400,6 +405,14 @@ handle_start_element (GMarkupParseContext  *context,
           {
             parser->state = STATE_MONITOR_COLOR_MODE;
           }
+        else if (g_str_equal (element_name, "hdrautoswitch"))
+          {
+            parser->state = STATE_MONITOR_HDR_AUTO_SWITCH;
+          }
+        else if (g_str_equal (element_name, "sdrwhitelevel"))
+          {
+            parser->state = STATE_MONITOR_SDR_WHITE_LEVEL;
+          }
         else
           {
             g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
@@ -490,6 +503,8 @@ handle_start_element (GMarkupParseContext  *context,
     case STATE_MONITOR_RGB_RANGE:
     case STATE_MONITOR_COLOR_FORMAT:
     case STATE_MONITOR_COLOR_MODE:
+    case STATE_MONITOR_HDR_AUTO_SWITCH:
+    case STATE_MONITOR_SDR_WHITE_LEVEL:
       {
         g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
                      "Invalid element '%s' under a monitor setting",
@@ -706,6 +721,8 @@ handle_end_element (GMarkupParseContext  *context,
     case STATE_MONITOR_RGB_RANGE:
     case STATE_MONITOR_COLOR_FORMAT:
     case STATE_MONITOR_COLOR_MODE:
+    case STATE_MONITOR_HDR_AUTO_SWITCH:
+    case STATE_MONITOR_SDR_WHITE_LEVEL:
       {
         parser->state = STATE_MONITOR;
         return;
@@ -1180,6 +1197,29 @@ handle_text (GMarkupParseContext *context,
         return;
       }
 
+    case STATE_MONITOR_HDR_AUTO_SWITCH:
+      {
+        gboolean value;
+
+        if (read_bool (text, text_len, &value, error))
+          parser->current_monitor_config->no_hdr_auto_switch = !value;
+        return;
+      }
+
+    case STATE_MONITOR_SDR_WHITE_LEVEL:
+      {
+        int value;
+
+        if (!read_int (text, text_len, &value, error))
+          return;
+        if (value < META_MIN_SDR_WHITE_LEVEL || value > META_MAX_SDR_WHITE_LEVEL)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid SDR white level %d", value);
+        else
+          parser->current_monitor_config->sdr_white_level = value;
+        return;
+      }
+
     case STATE_MONITOR_COLOR_FORMAT:
       {
         int value = value_from_name (color_format_names,
@@ -1326,6 +1366,11 @@ append_monitors (GString *buffer,
           monitor_config->color_mode < G_N_ELEMENTS (color_mode_names))
         g_string_append_printf (buffer, "        <colormode>%s</colormode>\n",
                                 color_mode_names[monitor_config->color_mode]);
+      if (monitor_config->no_hdr_auto_switch)
+        g_string_append (buffer, "        <hdrautoswitch>no</hdrautoswitch>\n");
+      if (monitor_config->sdr_white_level)
+        g_string_append_printf (buffer, "        <sdrwhitelevel>%u</sdrwhitelevel>\n",
+                                monitor_config->sdr_white_level);
       if (monitor_config->color_format > META_OUTPUT_COLOR_FORMAT_AUTO &&
           monitor_config->color_format < G_N_ELEMENTS (color_format_names))
         g_string_append_printf (buffer, "        <colorformat>%s</colorformat>\n",
