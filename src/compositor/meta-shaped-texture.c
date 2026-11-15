@@ -80,6 +80,7 @@ struct _MetaShapedTexture
   CoglTexture *mask_texture;
   CoglSnippet *snippet;
   CoglSnippet *color_snippet;
+  float content_peak;        /* cd/m², for tone mapping HDR content */
 
   CoglPipeline *base_pipeline;
   CoglPipeline *masked_pipeline;
@@ -376,6 +377,7 @@ get_base_pipeline (MetaShapedTexture *stex,
       /* Overridden per view when painted, see get_sdr_white_level() */
       meta_color_transform_set_sdr_white (pipeline,
                                           meta_color_transform_get_sdr_white_nits ());
+      meta_color_transform_set_peaks (pipeline, stex->content_peak, 0);
     }
 
   stex->base_pipeline = pipeline;
@@ -555,6 +557,33 @@ get_sdr_white_level (ClutterPaintContext *paint_context)
   return meta_color_transform_get_sdr_white_nits ();
 }
 
+/* The peak luminance HDR content is tone mapped to: that of the display of
+ * the view being painted when it is in the BT.2100 color mode, 0 (no tone
+ * mapping) elsewhere */
+static float
+get_display_peak (ClutterPaintContext *paint_context)
+{
+  ClutterStageView *view = clutter_paint_context_get_stage_view (paint_context);
+
+  if (view && META_IS_RENDERER_VIEW (view) &&
+      meta_renderer_view_get_color_mode (META_RENDERER_VIEW (view)) ==
+      META_OUTPUT_COLOR_MODE_BT2100)
+    return meta_renderer_view_get_hdr_peak_luminance (META_RENDERER_VIEW (view));
+
+  return 0;
+}
+
+static void
+set_color_uniforms (MetaShapedTexture   *stex,
+                    CoglPipeline        *pipeline,
+                    ClutterPaintContext *paint_context)
+{
+  meta_color_transform_set_sdr_white (pipeline,
+                                      get_sdr_white_level (paint_context));
+  meta_color_transform_set_peaks (pipeline, stex->content_peak,
+                                  get_display_peak (paint_context));
+}
+
 static void
 do_paint_content (MetaShapedTexture   *stex,
                   ClutterPaintNode    *root_node,
@@ -676,8 +705,7 @@ do_paint_content (MetaShapedTexture   *stex,
 
           opaque_pipeline = get_unblended_pipeline (stex, ctx);
           if (stex->color_snippet)
-            meta_color_transform_set_sdr_white (opaque_pipeline,
-                                                get_sdr_white_level (paint_context));
+            set_color_uniforms (stex, opaque_pipeline, paint_context);
           cogl_pipeline_set_layer_texture (opaque_pipeline, 0, paint_tex);
           cogl_pipeline_set_layer_filters (opaque_pipeline, 0, filter, filter);
 
@@ -721,8 +749,7 @@ do_paint_content (MetaShapedTexture   *stex,
         }
 
       if (stex->color_snippet)
-        meta_color_transform_set_sdr_white (blended_pipeline,
-                                            get_sdr_white_level (paint_context));
+        set_color_uniforms (stex, blended_pipeline, paint_context);
       cogl_pipeline_set_layer_texture (blended_pipeline, 0, paint_tex);
       cogl_pipeline_set_layer_filters (blended_pipeline, 0, filter, filter);
 
@@ -1106,6 +1133,19 @@ meta_shaped_texture_set_color_snippet (MetaShapedTexture *stex,
   g_clear_pointer (&stex->color_snippet, cogl_object_unref);
   if (snippet)
     stex->color_snippet = cogl_object_ref (snippet);
+}
+
+/**
+ * meta_shaped_texture_set_content_peak: (skip)
+ *
+ * Sets the peak luminance of HDR content, in cd/m², which the color snippet
+ * tone maps to the display's.
+ */
+void
+meta_shaped_texture_set_content_peak (MetaShapedTexture *stex,
+                                      float              nits)
+{
+  stex->content_peak = nits;
 }
 
 /**

@@ -194,6 +194,9 @@ meta_wayland_actor_surface_real_sync_actor_state (MetaWaylandActorSurface *actor
         stex,
         meta_wayland_color_description_is_hdr10 (surface->color_management.description) ?
         meta_color_transform_get_pq_to_composite_snippet () : NULL);
+      meta_shaped_texture_set_content_peak (
+        stex,
+        meta_wayland_color_description_get_content_peak (surface->color_management.description));
       meta_shaped_texture_set_is_y_inverted (stex, is_y_inverted);
       meta_shaped_texture_set_buffer_scale (stex, surface->scale);
       cogl_clear_object (&snippet);
