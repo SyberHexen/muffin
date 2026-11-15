@@ -24,6 +24,7 @@
 #include "backends/meta-monitor.h"
 
 #include "backends/meta-backend-private.h"
+#include "backends/meta-color-transform.h"
 #include "backends/edid.h"
 #include "backends/meta-crtc.h"
 #include "backends/meta-gpu.h"
@@ -414,6 +415,13 @@ meta_monitor_get_color_mode (MetaMonitor *monitor)
   return meta_monitor_get_main_output (monitor)->color_mode;
 }
 
+/* Whether HDR passthrough may switch @monitor to the BT.2100 color mode */
+gboolean
+meta_monitor_get_hdr_auto_switch (MetaMonitor *monitor)
+{
+  return !meta_monitor_get_main_output (monitor)->no_hdr_auto_switch;
+}
+
 gboolean
 meta_monitor_is_vrr_capable (MetaMonitor *monitor)
 {
@@ -426,6 +434,13 @@ meta_monitor_get_vrr_mode (MetaMonitor *monitor)
   MetaOutput *output = meta_monitor_get_main_output (monitor);
 
   return output->vrr_capable ? output->vrr_mode : META_OUTPUT_VRR_MODE_OFF;
+}
+
+/* The luminance SDR white is shown at in the BT.2100 color mode, cd/m² */
+float
+meta_monitor_get_sdr_white_level (MetaMonitor *monitor)
+{
+  return meta_output_get_sdr_white_level (meta_monitor_get_main_output (monitor));
 }
 
 gboolean

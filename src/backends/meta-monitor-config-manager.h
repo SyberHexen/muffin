@@ -37,7 +37,12 @@ typedef struct _MetaMonitorConfig
   MetaOutputRGBRange rgb_range;          /* UNKNOWN: not set */
   MetaOutputColorFormat color_format;    /* UNKNOWN: not set */
   MetaOutputColorMode color_mode;
+  /* HDR: whether HDR passthrough may not switch the output to the BT.2100
+   * color mode by itself, and the luminance SDR white is shown at in that
+   * color mode, in cd/m² (0 for the default) */
+  gboolean no_hdr_auto_switch;
   MetaOutputVrrMode vrr_mode;
+  unsigned int sdr_white_level;
 } MetaMonitorConfig;
 
 typedef struct _MetaLogicalMonitorConfig

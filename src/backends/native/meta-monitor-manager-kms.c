@@ -245,8 +245,10 @@ apply_crtc_assignments (MetaMonitorManager *manager,
         output->color_format = output_info->color_format;
       if (output->supported_color_modes & (1 << output_info->color_mode))
         output->color_mode = output_info->color_mode;
+      output->no_hdr_auto_switch = output_info->no_hdr_auto_switch;
       output->vrr_mode = output->vrr_capable ? output_info->vrr_mode
                                              : META_OUTPUT_VRR_MODE_OFF;
+      output->sdr_white_level = output_info->sdr_white_level;
     }
 
   /* Disable outputs not mentioned in the list */

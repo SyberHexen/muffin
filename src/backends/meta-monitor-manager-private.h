@@ -96,7 +96,9 @@ struct _MetaOutputInfo
   MetaOutputRGBRange rgb_range;
   MetaOutputColorFormat color_format;
   MetaOutputColorMode color_mode;
+  gboolean no_hdr_auto_switch;
   MetaOutputVrrMode vrr_mode;
+  unsigned int sdr_white_level;
 };
 
 #define META_TYPE_MONITOR_MANAGER            (meta_monitor_manager_get_type ())
