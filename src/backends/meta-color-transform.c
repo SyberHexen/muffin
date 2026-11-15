@@ -161,14 +161,12 @@ create_snippet (const char *body)
 {
   g_autofree char *declarations = NULL;
   g_autofree char *post = NULL;
-  char white[G_ASCII_DTOSTR_BUF_SIZE];
 
-  /* Not printf's %f, which would write a decimal comma in some locales */
-  g_ascii_formatd (white, sizeof (white), "%.4f",
-                   meta_color_transform_get_sdr_white_nits ());
+  /* SDR white depends on the output; see
+   * meta_color_transform_set_sdr_white() */
   declarations =
     g_strdup_printf ("%s\n"
-                     "const float meta_cc_sdr_white = %s;\n"
+                     "uniform float meta_cc_sdr_white;\n"
                      "vec3 meta_cc_sdr_to_linear (vec3 e)\n"
                      "{\n"
                      "  return meta_cc_%s_to_linear (e);\n"
@@ -177,7 +175,7 @@ create_snippet (const char *body)
                      "{\n"
                      "  return meta_cc_linear_to_%s (l);\n"
                      "}\n",
-                     color_functions, white,
+                     color_functions,
                      get_sdr_transfer (), get_sdr_transfer ());
   post = g_strdup_printf ("{\n"
                           "  float a = cogl_color_out.a;\n"
@@ -230,4 +228,24 @@ meta_color_transform_get_pq_to_composite_snippet (void)
       "  c = meta_cc_linear_to_sdr (meta_cc_bt2020_to_bt709 * l);\n");
 
   return snippet;
+}
+
+/**
+ * meta_color_transform_set_sdr_white: (skip)
+ * @pipeline: a pipeline with one of the snippets above
+ * @nits: the luminance of SDR white, in cd/m²
+ *
+ * Sets the SDR white level the pipeline's color snippet converts with.
+ * Every pipeline using the snippets needs it set: the shaders read 0
+ * otherwise.
+ */
+void
+meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
+                                    float         nits)
+{
+  int location;
+
+  location = cogl_pipeline_get_uniform_location (pipeline,
+                                                 "meta_cc_sdr_white");
+  cogl_pipeline_set_uniform_1f (pipeline, location, nits);
 }
