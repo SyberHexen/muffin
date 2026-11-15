@@ -1514,6 +1514,93 @@ meta_window_actor_notify_damaged (MetaWindowActor *window_actor)
 }
 
 /**
+ * meta_window_actor_get_thumbnail:
+ * @self: A #MetaWindowActor
+ * @max_width: the largest width of the thumbnail
+ * @max_height: the largest height of the thumbnail
+ * @width: (out): the width of the thumbnail
+ * @height: (out): the height of the thumbnail
+ * @stride: (out): its stride
+ *
+ * Paints the window scaled down to fit @max_width x @max_height (never
+ * enlarged) as a clone would: as it is, also while minimized or moved,
+ * scaled or faded by an effect.  For pickers such as the screen sharing
+ * one; cheap, as it is painted small on the GPU.
+ *
+ * Returns: (transfer full) (nullable): Cairo ARGB32 pixels
+ */
+GBytes *
+meta_window_actor_get_thumbnail (MetaWindowActor *self,
+                                 int              max_width,
+                                 int              max_height,
+                                 int             *width,
+                                 int             *height,
+                                 int             *stride)
+{
+  ClutterActor *actor = CLUTTER_ACTOR (self);
+  MetaBackend *backend = meta_get_backend ();
+  ClutterBackend *clutter_backend = meta_backend_get_clutter_backend (backend);
+  CoglContext *cogl_context =
+    clutter_backend_get_cogl_context (clutter_backend);
+  g_autoptr (GError) error = NULL;
+  ClutterPaintContext *paint_context;
+  CoglTexture2D *texture;
+  CoglOffscreen *offscreen;
+  CoglFramebuffer *framebuffer;
+  CoglColor clear_color;
+  float actor_width, actor_height, scale;
+  uint8_t *data;
+  int w, h;
+
+  g_return_val_if_fail (META_IS_WINDOW_ACTOR (self), NULL);
+
+  if (meta_window_actor_is_destroyed (self))
+    return NULL;
+
+  clutter_actor_get_size (actor, &actor_width, &actor_height);
+  if (actor_width < 1 || actor_height < 1 || max_width < 1 || max_height < 1)
+    return NULL;
+
+  scale = MIN (1.0f, MIN (max_width / actor_width, max_height / actor_height));
+  w = MAX (1, (int) roundf (actor_width * scale));
+  h = MAX (1, (int) roundf (actor_height * scale));
+
+  texture = cogl_texture_2d_new_with_size (cogl_context, w, h);
+  if (!texture)
+    return NULL;
+  offscreen = cogl_offscreen_new_with_texture (COGL_TEXTURE (texture));
+  framebuffer = COGL_FRAMEBUFFER (offscreen);
+  cogl_object_unref (texture);
+  if (!cogl_framebuffer_allocate (framebuffer, &error))
+    {
+      cogl_object_unref (framebuffer);
+      return NULL;
+    }
+
+  cogl_color_init_from_4ub (&clear_color, 0, 0, 0, 0);
+  cogl_framebuffer_clear (framebuffer, COGL_BUFFER_BIT_COLOR, &clear_color);
+  cogl_framebuffer_orthographic (framebuffer, 0, 0, w, h, 0, 1.0);
+  cogl_framebuffer_set_viewport (framebuffer, 0, 0, w, h);
+  cogl_framebuffer_scale (framebuffer, scale, scale, 1);
+
+  clutter_actor_inhibit_culling (actor);
+  paint_context = clutter_paint_context_new_for_framebuffer (framebuffer);
+  clutter_actor_paint_as_clone_source (actor, paint_context);
+  clutter_paint_context_destroy (paint_context);
+  clutter_actor_uninhibit_culling (actor);
+
+  data = g_malloc (w * h * 4);
+  cogl_framebuffer_read_pixels (framebuffer, 0, 0, w, h,
+                                CLUTTER_CAIRO_FORMAT_ARGB32, data);
+  cogl_object_unref (framebuffer);
+
+  *width = w;
+  *height = h;
+  *stride = w * 4;
+  return g_bytes_new_take (data, w * h * 4);
+}
+
+/**
  * meta_window_actor_get_image:
  * @self: A #MetaWindowActor
  * @clip: (nullable): A clipping rectangle, to help prevent extra processing.

@@ -282,6 +282,15 @@ void meta_display_get_monitor_geometry (MetaDisplay   *display,
                                         MetaRectangle *geometry);
 
 META_EXPORT
+GBytes * meta_display_get_monitor_thumbnail (MetaDisplay *display,
+                                             int          monitor,
+                                             int          max_width,
+                                             int          max_height,
+                                             int         *width,
+                                             int         *height,
+                                             int         *stride);
+
+META_EXPORT
 float meta_display_get_monitor_scale (MetaDisplay *display,
                                       int          monitor);
 
