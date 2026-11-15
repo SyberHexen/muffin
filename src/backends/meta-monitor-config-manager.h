@@ -43,6 +43,9 @@ typedef struct _MetaMonitorConfig
   gboolean no_hdr_auto_switch;
   MetaOutputVrrMode vrr_mode;
   unsigned int sdr_white_level;
+  /* The display's peak luminance in cd/m² to use instead of its EDID's,
+   * 0 for none */
+  unsigned int hdr_peak_luminance;
 } MetaMonitorConfig;
 
 typedef struct _MetaLogicalMonitorConfig

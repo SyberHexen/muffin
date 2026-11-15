@@ -87,6 +87,7 @@
  *         <hdrautoswitch>no</hdrautoswitch>
  *         <vrrmode>automatic</vrrmode>
  *         <sdrwhitelevel>240</sdrwhitelevel>
+ *         <hdrpeakluminance>600</hdrpeakluminance>
  *       </monitor>
  *       <presentation>yes</presentation>
  *     </logicalmonitor>
@@ -173,6 +174,7 @@ typedef enum
   STATE_MONITOR_HDR_AUTO_SWITCH,
   STATE_MONITOR_VRR_MODE,
   STATE_MONITOR_SDR_WHITE_LEVEL,
+  STATE_MONITOR_HDR_PEAK_LUMINANCE,
   STATE_DISABLED,
 } ParserState;
 
@@ -419,6 +421,10 @@ handle_start_element (GMarkupParseContext  *context,
           {
             parser->state = STATE_MONITOR_SDR_WHITE_LEVEL;
           }
+        else if (g_str_equal (element_name, "hdrpeakluminance"))
+          {
+            parser->state = STATE_MONITOR_HDR_PEAK_LUMINANCE;
+          }
         else
           {
             g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
@@ -512,6 +518,7 @@ handle_start_element (GMarkupParseContext  *context,
     case STATE_MONITOR_HDR_AUTO_SWITCH:
     case STATE_MONITOR_VRR_MODE:
     case STATE_MONITOR_SDR_WHITE_LEVEL:
+    case STATE_MONITOR_HDR_PEAK_LUMINANCE:
       {
         g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_UNKNOWN_ELEMENT,
                      "Invalid element '%s' under a monitor setting",
@@ -731,6 +738,7 @@ handle_end_element (GMarkupParseContext  *context,
     case STATE_MONITOR_HDR_AUTO_SWITCH:
     case STATE_MONITOR_VRR_MODE:
     case STATE_MONITOR_SDR_WHITE_LEVEL:
+    case STATE_MONITOR_HDR_PEAK_LUMINANCE:
       {
         parser->state = STATE_MONITOR;
         return;
@@ -1247,6 +1255,21 @@ handle_text (GMarkupParseContext *context,
         return;
       }
 
+    case STATE_MONITOR_HDR_PEAK_LUMINANCE:
+      {
+        int value;
+
+        if (!read_int (text, text_len, &value, error))
+          return;
+        if (value < META_MIN_HDR_PEAK_LUMINANCE ||
+            value > META_MAX_HDR_PEAK_LUMINANCE)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid HDR peak luminance %d", value);
+        else
+          parser->current_monitor_config->hdr_peak_luminance = value;
+        return;
+      }
+
     case STATE_MONITOR_COLOR_FORMAT:
       {
         int value = value_from_name (color_format_names,
@@ -1402,6 +1425,9 @@ append_monitors (GString *buffer,
       if (monitor_config->sdr_white_level)
         g_string_append_printf (buffer, "        <sdrwhitelevel>%u</sdrwhitelevel>\n",
                                 monitor_config->sdr_white_level);
+      if (monitor_config->hdr_peak_luminance)
+        g_string_append_printf (buffer, "        <hdrpeakluminance>%u</hdrpeakluminance>\n",
+                                monitor_config->hdr_peak_luminance);
       if (monitor_config->color_format > META_OUTPUT_COLOR_FORMAT_AUTO &&
           monitor_config->color_format < G_N_ELEMENTS (color_format_names))
         g_string_append_printf (buffer, "        <colorformat>%s</colorformat>\n",

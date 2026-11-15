@@ -249,6 +249,7 @@ apply_crtc_assignments (MetaMonitorManager *manager,
       output->vrr_mode = output->vrr_capable ? output_info->vrr_mode
                                              : META_OUTPUT_VRR_MODE_OFF;
       output->sdr_white_level = output_info->sdr_white_level;
+      output->hdr_peak_luminance = output_info->hdr_peak_luminance;
     }
 
   /* Disable outputs not mentioned in the list */
