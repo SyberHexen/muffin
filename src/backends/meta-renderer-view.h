@@ -35,4 +35,10 @@ float meta_renderer_view_get_sdr_white_level (MetaRendererView *view);
 
 float meta_renderer_view_get_hdr_peak_luminance (MetaRendererView *view);
 
+void meta_renderer_view_set_gamma (MetaRendererView     *view,
+                                   size_t                size,
+                                   const unsigned short *red,
+                                   const unsigned short *green,
+                                   const unsigned short *blue);
+
 #endif /* META_RENDERER_VIEW_H */
