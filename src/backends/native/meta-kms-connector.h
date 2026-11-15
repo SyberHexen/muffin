@@ -84,6 +84,11 @@ void meta_kms_connector_set_rgb_range (MetaKmsConnector   *connector,
 
 unsigned int meta_kms_connector_get_supported_color_modes (MetaKmsConnector *connector);
 
+void meta_kms_connector_set_hdr_luminance (MetaKmsConnector *connector,
+                                           float             max_luminance,
+                                           float             max_frame_avg,
+                                           float             min_luminance);
+
 void meta_kms_connector_set_color_mode (MetaKmsConnector    *connector,
                                         MetaKmsUpdate       *update,
                                         int                  fd,
