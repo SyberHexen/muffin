@@ -766,16 +766,41 @@ color_format_from_kms_name (const char *name)
   else if (g_ascii_strcasecmp (name, "RGB") == 0)
     return META_OUTPUT_COLOR_FORMAT_RGB;
   else if (g_ascii_strcasecmp (name, "YUV 4:4:4") == 0 ||
-           g_ascii_strcasecmp (name, "YCbCr 4:4:4") == 0)
+           g_ascii_strcasecmp (name, "YCbCr 4:4:4") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr444") == 0)
     return META_OUTPUT_COLOR_FORMAT_YCBCR444;
   else if (g_ascii_strcasecmp (name, "YUV 4:2:2") == 0 ||
-           g_ascii_strcasecmp (name, "YCbCr 4:2:2") == 0)
+           g_ascii_strcasecmp (name, "YCbCr 4:2:2") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr422") == 0)
     return META_OUTPUT_COLOR_FORMAT_YCBCR422;
   else if (g_ascii_strcasecmp (name, "YUV 4:2:0") == 0 ||
-           g_ascii_strcasecmp (name, "YCbCr 4:2:0") == 0)
+           g_ascii_strcasecmp (name, "YCbCr 4:2:0") == 0 ||
+           g_ascii_strcasecmp (name, "YCbCr420") == 0)
     return META_OUTPUT_COLOR_FORMAT_YCBCR420;
   else
     return META_OUTPUT_COLOR_FORMAT_UNKNOWN;
+}
+
+/* Use an enum property as the connector's color format, by the names of
+ * its values: drivers number them differently */
+static void
+set_color_format_property (MetaKmsConnector  *connector,
+                           drmModePropertyPtr prop)
+{
+  int j;
+
+  connector->color_format_prop_id = prop->prop_id;
+  connector->supported_color_formats = 0;
+  for (j = 0; j < prop->count_enums; j++)
+    {
+      MetaOutputColorFormat format =
+        color_format_from_kms_name (prop->enums[j].name);
+
+      if (format == META_OUTPUT_COLOR_FORMAT_UNKNOWN)
+        continue;
+      connector->color_format_values[format] = prop->enums[j].value;
+      connector->supported_color_formats |= 1 << format;
+    }
 }
 
 static void
@@ -783,6 +808,7 @@ find_property_ids (MetaKmsConnector  *connector,
                    MetaKmsImplDevice *impl_device,
                    drmModeConnector  *drm_connector)
 {
+  gboolean have_standard_color_format = FALSE;
   int fd;
   int i;
 
@@ -829,20 +855,22 @@ find_property_ids (MetaKmsConnector  *connector,
       else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
                strcmp (prop->name, "color format") == 0)
         {
-          int j;
-
-          connector->color_format_prop_id = prop->prop_id;
-          connector->supported_color_formats = 0;
-          for (j = 0; j < prop->count_enums; j++)
-            {
-              MetaOutputColorFormat format =
-                color_format_from_kms_name (prop->enums[j].name);
-
-              if (format == META_OUTPUT_COLOR_FORMAT_UNKNOWN)
-                continue;
-              connector->color_format_values[format] = prop->enums[j].value;
-              connector->supported_color_formats |= 1 << format;
-            }
+          set_color_format_property (connector, prop);
+          have_standard_color_format = TRUE;
+        }
+      /*
+       * The NVIDIA driver has its own color format property, on HDMI
+       * connectors only, instead of the standard one.  Use it only where
+       * the standard property is missing, so a driver that gains the
+       * standard one uses that; if the NVIDIA one is renamed or dropped,
+       * the setting is just not offered.  NVIDIA has no RGB range
+       * property: RGB is sent as full range, YCbCr as limited range.
+       */
+      else if ((prop->flags & DRM_MODE_PROP_ENUM) &&
+               strcmp (prop->name, "NV_CONNECTOR_COLOR_FORMAT") == 0 &&
+               !have_standard_color_format)
+        {
+          set_color_format_property (connector, prop);
         }
 
       drmModeFreeProperty (prop);
