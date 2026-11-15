@@ -129,6 +129,11 @@ struct _MetaOutput
   float edid_min_luminance;
   unsigned int hdr_peak_luminance;
 
+  /* The display's primaries and white point from its EDID, as CIE 1931 xy
+   * (red, green, blue, white) */
+  gboolean has_edid_primaries;
+  double edid_primaries[8];
+
   /* What the EDID allows besides RGB; NULL without a usable EDID */
   struct _EdidColorFormats *edid_color_formats;
 
