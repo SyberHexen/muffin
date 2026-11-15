@@ -188,15 +188,35 @@ meta_wayland_actor_surface_real_sync_actor_state (MetaWaylandActorSurface *actor
 
       meta_shaped_texture_set_texture (stex, surface->texture);
       meta_shaped_texture_set_snippet (stex, snippet);
-      /* HDR10 content is converted to the colors windows are composited
-       * in; everything else is taken as sRGB, as it always was */
-      meta_shaped_texture_set_color_snippet (
-        stex,
-        meta_wayland_color_description_is_hdr10 (surface->color_management.description) ?
-        meta_color_transform_get_pq_to_composite_snippet () : NULL);
-      meta_shaped_texture_set_content_peak (
-        stex,
-        meta_wayland_color_description_get_content_peak (surface->color_management.description));
+      /* Content with a color description other than BT.709 SDR is
+       * converted to the colors windows are composited in; the rest is
+       * taken as sRGB, as it always was */
+      {
+        MetaWaylandColorDescription *description =
+          surface->color_management.description;
+        MetaColorTransformDecode decode;
+        float to_bt709[9];
+        float unit_nits, unit_relative;
+
+        if (meta_wayland_color_description_get_conversion (description,
+                                                           &decode,
+                                                           to_bt709,
+                                                           &unit_nits,
+                                                           &unit_relative))
+          {
+            meta_shaped_texture_set_color_snippet (
+              stex, meta_color_transform_get_to_composite_snippet (decode));
+            meta_shaped_texture_set_content_colors (stex, to_bt709,
+                                                    unit_nits,
+                                                    unit_relative);
+          }
+        else
+          {
+            meta_shaped_texture_set_color_snippet (stex, NULL);
+          }
+        meta_shaped_texture_set_content_peak (
+          stex, meta_wayland_color_description_get_content_peak (description));
+      }
       meta_shaped_texture_set_is_y_inverted (stex, is_y_inverted);
       meta_shaped_texture_set_buffer_scale (stex, surface->scale);
       cogl_clear_object (&snippet);
