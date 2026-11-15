@@ -23,6 +23,7 @@
 #include <glib.h>
 #include <stdint.h>
 
+#include "backends/meta-color-transform.h"
 #include "wayland/meta-wayland-types.h"
 
 void meta_wayland_init_color_management (MetaWaylandCompositor *compositor);
@@ -34,6 +35,16 @@ void meta_wayland_color_description_unref (MetaWaylandColorDescription *descript
 
 /* PQ transfer function with BT.2020 primaries, which HDR10 carries as is */
 gboolean meta_wayland_color_description_is_hdr10 (MetaWaylandColorDescription *description);
+
+gboolean meta_wayland_color_description_is_hdr (MetaWaylandColorDescription *description);
+
+gboolean meta_wayland_color_description_get_conversion (MetaWaylandColorDescription *description,
+                                                        MetaColorTransformDecode    *decode,
+                                                        float                        to_bt709[9],
+                                                        float                       *unit_nits,
+                                                        float                       *unit_relative);
+
+gboolean meta_wayland_color_description_needs_conversion (MetaWaylandColorDescription *description);
 
 float meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description);
 

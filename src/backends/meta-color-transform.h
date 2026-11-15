@@ -41,7 +41,26 @@ CoglSnippet * meta_color_transform_get_composite_to_pq_snippet (void);
 
 CoglSnippet * meta_color_transform_get_composite_to_pq_lut_snippet (void);
 
-CoglSnippet * meta_color_transform_get_pq_to_composite_snippet (void);
+/* How the content of a surface is encoded */
+typedef enum
+{
+  META_COLOR_TRANSFORM_DECODE_SDR,     /* the SDR transfer function views
+                                        * composite with, SDR white at 1.0 */
+  META_COLOR_TRANSFORM_DECODE_BT1886,  /* a 2.4 power, SDR white at 1.0 */
+  META_COLOR_TRANSFORM_DECODE_LINEAR,  /* linear, extended */
+  META_COLOR_TRANSFORM_DECODE_PQ,      /* SMPTE ST 2084 */
+  META_COLOR_TRANSFORM_DECODE_HLG,     /* ITU-R BT.2100 HLG */
+  META_COLOR_TRANSFORM_N_DECODES
+} MetaColorTransformDecode;
+
+CoglSnippet * meta_color_transform_get_to_composite_snippet (MetaColorTransformDecode decode);
+
+void meta_color_transform_get_to_bt709 (const int32_t primaries[8],
+                                        float         to_bt709[9]);
+
+void meta_color_transform_set_content (CoglPipeline *pipeline,
+                                       const float   to_bt709[9],
+                                       float         unit_nits);
 
 void meta_color_transform_set_sdr_white (CoglPipeline *pipeline,
                                          float         nits);
