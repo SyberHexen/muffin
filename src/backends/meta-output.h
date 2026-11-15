@@ -112,15 +112,22 @@ struct _MetaOutput
   unsigned int supported_color_formats;
   MetaOutputColorMode color_mode;
   unsigned int supported_color_modes;
+
+  /* Variable refresh rate: whether the sink can take it, and when to use it */
+  gboolean vrr_capable;
+  MetaOutputVrrMode vrr_mode;
   /* HDR: whether HDR passthrough may not switch the output to the BT.2100
    * color mode by itself, and the luminance SDR white is shown at in that
    * color mode, in cd/m² (0 for the default) */
   gboolean no_hdr_auto_switch;
   unsigned int sdr_white_level;
 
-  /* Variable refresh rate: whether the sink can take it, and when to use it */
-  gboolean vrr_capable;
-  MetaOutputVrrMode vrr_mode;
+  /* The display's luminance from its EDID, in cd/m², 0 if not given; and
+   * the peak luminance the user set instead, 0 if none */
+  float edid_max_luminance;
+  float edid_max_frame_avg;
+  float edid_min_luminance;
+  unsigned int hdr_peak_luminance;
 
   /* What the EDID allows besides RGB; NULL without a usable EDID */
   struct _EdidColorFormats *edid_color_formats;
@@ -148,6 +155,8 @@ MetaGpu * meta_output_get_gpu (MetaOutput *output);
 const char * meta_output_get_name (MetaOutput *output);
 
 float meta_output_get_sdr_white_level (MetaOutput *output);
+
+float meta_output_get_hdr_peak_luminance (MetaOutput *output);
 
 META_EXPORT_TEST
 void meta_output_assign_crtc (MetaOutput *output,

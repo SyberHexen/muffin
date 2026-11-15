@@ -480,6 +480,7 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
       output->no_hdr_auto_switch = old_output->no_hdr_auto_switch;
       output->vrr_mode = old_output->vrr_mode;
       output->sdr_white_level = old_output->sdr_white_level;
+      output->hdr_peak_luminance = old_output->hdr_peak_luminance;
     }
 
   meta_output_parse_edid (output, connector_state->edid_data);
