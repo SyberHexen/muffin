@@ -286,6 +286,9 @@ float meta_display_get_monitor_scale (MetaDisplay *display,
                                       int          monitor);
 
 META_EXPORT
+int meta_display_get_xwayland_scale (MetaDisplay *display);
+
+META_EXPORT
 gboolean meta_display_get_monitor_in_fullscreen (MetaDisplay *display,
                                                  int          monitor);
 
