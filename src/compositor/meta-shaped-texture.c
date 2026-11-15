@@ -27,6 +27,8 @@
 
 #include "config.h"
 
+#include <string.h>
+
 #include "backends/meta-color-transform.h"
 #include "backends/meta-monitor-transform.h"
 #include "backends/meta-renderer-view.h"
@@ -81,6 +83,9 @@ struct _MetaShapedTexture
   CoglSnippet *snippet;
   CoglSnippet *color_snippet;
   float content_peak;        /* cd/m², for tone mapping HDR content */
+  float content_to_bt709[9]; /* the content's primaries to BT.709 */
+  float content_unit_nits;   /* 1.0 of linear content, in cd/m², or 0 */
+  float content_unit_relative; /* else 1.0 relative to SDR white */
 
   CoglPipeline *base_pipeline;
   CoglPipeline *masked_pipeline;
@@ -152,6 +157,19 @@ meta_shaped_texture_init (MetaShapedTexture *stex)
   stex->create_mipmaps = TRUE;
   stex->is_y_inverted = TRUE;
   stex->transform = META_MONITOR_TRANSFORM_NORMAL;
+  stex->content_to_bt709[0] = 1.0f;
+  stex->content_to_bt709[4] = 1.0f;
+  stex->content_to_bt709[8] = 1.0f;
+  stex->content_unit_relative = 1.0f;
+}
+
+/* What 1.0 of linear content is, in cd/m², composited with @sdr_white */
+static float
+get_content_unit (MetaShapedTexture *stex,
+                  float              sdr_white)
+{
+  return stex->content_unit_nits > 0 ? stex->content_unit_nits
+                                     : stex->content_unit_relative * sdr_white;
 }
 
 static void
@@ -378,6 +396,9 @@ get_base_pipeline (MetaShapedTexture *stex,
       meta_color_transform_set_sdr_white (pipeline,
                                           meta_color_transform_get_sdr_white_nits ());
       meta_color_transform_set_peaks (pipeline, stex->content_peak, 0);
+      meta_color_transform_set_content (pipeline, stex->content_to_bt709,
+                                        get_content_unit (stex,
+                                                          meta_color_transform_get_sdr_white_nits ()));
     }
 
   stex->base_pipeline = pipeline;
@@ -587,8 +608,11 @@ set_color_uniforms (MetaShapedTexture   *stex,
                     CoglPipeline        *pipeline,
                     ClutterPaintContext *paint_context)
 {
-  meta_color_transform_set_sdr_white (pipeline,
-                                      get_sdr_white_level (paint_context));
+  float sdr_white = get_sdr_white_level (paint_context);
+
+  meta_color_transform_set_sdr_white (pipeline, sdr_white);
+  meta_color_transform_set_content (pipeline, stex->content_to_bt709,
+                                    get_content_unit (stex, sdr_white));
   meta_color_transform_set_peaks (pipeline, stex->content_peak,
                                   get_display_peak (paint_context));
   meta_color_transform_set_gamut_clip (pipeline,
@@ -1144,6 +1168,26 @@ meta_shaped_texture_set_color_snippet (MetaShapedTexture *stex,
   g_clear_pointer (&stex->color_snippet, cogl_object_unref);
   if (snippet)
     stex->color_snippet = cogl_object_ref (snippet);
+}
+
+/**
+ * meta_shaped_texture_set_content_colors: (skip)
+ * @to_bt709: the content's linear RGB to linear BT.709, row major
+ * @unit_nits: what 1.0 of linear content is, in cd/m², or 0
+ * @unit_relative: when @unit_nits is 0, what 1.0 of linear content is
+ *   relative to SDR white
+ *
+ * Describes the content the color snippet converts.
+ */
+void
+meta_shaped_texture_set_content_colors (MetaShapedTexture *stex,
+                                        const float        to_bt709[9],
+                                        float              unit_nits,
+                                        float              unit_relative)
+{
+  memcpy (stex->content_to_bt709, to_bt709, sizeof (stex->content_to_bt709));
+  stex->content_unit_nits = unit_nits;
+  stex->content_unit_relative = unit_relative;
 }
 
 /**
