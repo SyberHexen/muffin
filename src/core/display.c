@@ -85,6 +85,7 @@
 #ifdef HAVE_WAYLAND
 #include "compositor/meta-compositor-native.h"
 #include "compositor/meta-compositor-server.h"
+#include "wayland/meta-xwayland.h"
 #include "wayland/meta-xwayland-private.h"
 #include "wayland/meta-wayland-tablet-seat.h"
 #include "wayland/meta-wayland-tablet-pad.h"
@@ -3877,6 +3878,32 @@ meta_display_get_monitor_scale (MetaDisplay *display,
     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
                                                           monitor);
   return logical_monitor->scale;
+}
+
+/**
+ * meta_display_get_xwayland_scale:
+ * @display: a #MetaDisplay
+ *
+ * Gets the number of X screen pixels per unit of the compositor's layout.
+ * When monitors use fractional or mixed scales on Wayland, Xwayland's screen
+ * is this many times the size of the layout, and X11 clients are told to
+ * scale their windows by the same factor.  Layout coordinates handed to an
+ * X11 client (to place windows itself, for example) must be multiplied by it.
+ *
+ * Return value: the scale, 1 when Xwayland's screen matches the layout (and
+ *   always in an X11 session)
+ */
+int
+meta_display_get_xwayland_scale (MetaDisplay *display)
+{
+  g_return_val_if_fail (META_IS_DISPLAY (display), 1);
+
+#ifdef HAVE_WAYLAND
+  if (meta_is_wayland_compositor ())
+    return meta_xwayland_get_effective_scale ();
+#endif
+
+  return 1;
 }
 
 /**
