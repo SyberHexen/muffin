@@ -345,6 +345,11 @@
 	      clients should not store it as the color mode
 	    - "sdr-white-level" (u): the luminance SDR content is shown at in
 	      the BT.2100 color mode, in cd/m² (with "supported-color-modes")
+	    - "hdr-peak-luminance" (u): the peak luminance of the display set
+	      by the user, in cd/m², 0 if none; HDR content is tone mapped to
+	      it and the display is told it in the HDR metadata
+	    - "hdr-edid-peak-luminance" (u): the peak luminance the display's
+	      EDID gives, used when "hdr-peak-luminance" is 0; 0 if none
 	    - "max-screen-size" (ii): the maximum size a screen may have
 				      (absence of this means unlimited screen
 				      size)
@@ -473,6 +478,8 @@
 	        - "hdr-auto-switch" (b): see GetCurrentState
 	        - "sdr-white-level" (u): see GetCurrentState; 80 to 1000, or 0
 	          for the default
+	        - "hdr-peak-luminance" (u): see GetCurrentState; 80 to 10000,
+	          or 0 to use the EDID's
 
 	@properties may effect the global monitor configuration state. Possible
 	properties are:

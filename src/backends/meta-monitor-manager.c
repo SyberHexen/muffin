@@ -1811,6 +1811,14 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
                                  "sdr-white-level",
                                  g_variant_new_uint32 ((uint32_t) roundf (
                                    meta_monitor_get_sdr_white_level (monitor))));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "hdr-peak-luminance",
+                                 g_variant_new_uint32 (
+                                   meta_monitor_get_main_output (monitor)->hdr_peak_luminance));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "hdr-edid-peak-luminance",
+                                 g_variant_new_uint32 ((uint32_t) roundf (
+                                   meta_monitor_get_main_output (monitor)->edid_max_luminance)));
         }
 
       is_builtin = meta_monitor_is_laptop_panel (monitor);
@@ -2171,6 +2179,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   uint32_t color_mode;
   gboolean hdr_auto_switch;
   uint32_t sdr_white_level;
+  uint32_t hdr_peak_luminance;
 
   g_variant_get (monitor_config_variant, "(ss@a{sv})",
                  &connector,
@@ -2294,6 +2303,26 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
       sdr_white_level = meta_monitor_get_main_output (monitor)->sdr_white_level;
     }
 
+  if (g_variant_lookup (properties_variant, "hdr-peak-luminance", "u",
+                        &hdr_peak_luminance))
+    {
+      if (hdr_peak_luminance != 0 &&
+          (hdr_peak_luminance < META_MIN_HDR_PEAK_LUMINANCE ||
+           hdr_peak_luminance > META_MAX_HDR_PEAK_LUMINANCE))
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "HDR peak luminance %u cd/m² requested, must be "
+                       "between %d and %d", hdr_peak_luminance,
+                       META_MIN_HDR_PEAK_LUMINANCE, META_MAX_HDR_PEAK_LUMINANCE);
+          return NULL;
+        }
+    }
+  else
+    {
+      hdr_peak_luminance =
+        meta_monitor_get_main_output (monitor)->hdr_peak_luminance;
+    }
+
   monitor_spec = meta_monitor_spec_clone (meta_monitor_get_spec (monitor));
 
   monitor_mode_spec = g_new0 (MetaMonitorModeSpec, 1);
@@ -2309,6 +2338,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
     .color_mode = color_mode,
     .no_hdr_auto_switch = !hdr_auto_switch,
     .sdr_white_level = sdr_white_level,
+    .hdr_peak_luminance = hdr_peak_luminance,
   };
 
   return monitor_config;
@@ -3593,9 +3623,20 @@ meta_output_parse_edid (MetaOutput *output,
       g_free (parsed_edid);
     }
 
-  g_clear_pointer (&output->edid_color_formats, g_free);
-  output->edid_color_formats =
-    decode_edid_color_formats (g_bytes_get_data (edid, &len), len);
+  if (edid)
+    {
+      EdidHdrStaticMetadata hdr;
+
+      decode_edid_hdr_static_metadata (g_bytes_get_data (edid, &len), len,
+                                       &hdr);
+      output->edid_max_luminance = hdr.max_luminance;
+      output->edid_max_frame_avg = hdr.max_frame_avg;
+      output->edid_min_luminance = hdr.min_luminance;
+
+      g_clear_pointer (&output->edid_color_formats, g_free);
+      output->edid_color_formats =
+        decode_edid_color_formats (g_bytes_get_data (edid, &len), len);
+    }
 
  out:
   if (!output->vendor)
