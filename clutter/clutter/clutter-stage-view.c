@@ -983,6 +983,18 @@ clutter_stage_view_has_pending_frame (ClutterStageView *view)
          cogl_onscreen_has_pending_frame (COGL_ONSCREEN (onscreen));
 }
 
+/**
+ * clutter_stage_view_is_redraw_queued: (skip)
+ *
+ * Whether @view is going to be painted again: unlike
+ * clutter_stage_is_redraw_queued(), not when only other views are.
+ */
+gboolean
+clutter_stage_view_is_redraw_queued (ClutterStageView *view)
+{
+  return clutter_stage_view_has_redraw_clip (view);
+}
+
 gboolean
 clutter_stage_view_has_full_redraw_clip (ClutterStageView *view)
 {
