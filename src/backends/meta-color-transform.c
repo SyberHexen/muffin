@@ -132,6 +132,37 @@ static const char color_functions[] =
   "        -0.587641139,  1.132899897, -0.100578898,\n"
   "        -0.072849863, -0.008349423,  1.118729661);\n";
 
+/* A gamma ramp (Night Light, color correction) given for the SDR signal,
+ * applied to the SDR-encoded composite before it is converted to PQ: 256
+ * entries per channel, interpolated.  Values past SDR white are scaled by
+ * the ramp at white, so they are tinted like it. */
+#define LUT_SIZE META_COLOR_TRANSFORM_LUT_SIZE
+
+static const char lut_functions[] =
+  "uniform vec3 meta_cc_lut[256];\n"
+  "\n"
+  /* GLSL 1.20: no integer min(), no indexing vectors by a variable */
+  "float meta_cc_lut_channel (float v, vec3 sel)\n"
+  "{\n"
+  "  if (v >= 1.0)\n"
+  "    return dot (meta_cc_lut[255], sel) * v;\n"
+  "  if (v <= 0.0)\n"
+  "    return dot (meta_cc_lut[0], sel) + v;\n"
+  "  float p = v * 255.0;\n"
+  "  float f = floor (p);\n"
+  "  int i = int (f);\n"
+  "  int j = int (min (f + 1.0, 255.0));\n"
+  "  return mix (dot (meta_cc_lut[i], sel), dot (meta_cc_lut[j], sel),\n"
+  "              p - f);\n"
+  "}\n"
+  "\n"
+  "vec3 meta_cc_apply_lut (vec3 c)\n"
+  "{\n"
+  "  return vec3 (meta_cc_lut_channel (c.r, vec3 (1.0, 0.0, 0.0)),\n"
+  "               meta_cc_lut_channel (c.g, vec3 (0.0, 1.0, 0.0)),\n"
+  "               meta_cc_lut_channel (c.b, vec3 (0.0, 0.0, 1.0)));\n"
+  "}\n";
+
 float
 meta_color_transform_get_sdr_white_nits (void)
 {
@@ -181,7 +212,8 @@ get_sdr_transfer (void)
 
 /* Run @body on the un-premultiplied color in "c" */
 static CoglSnippet *
-create_snippet (const char *body)
+create_snippet (const char *extra_declarations,
+                const char *body)
 {
   g_autofree char *declarations = NULL;
   g_autofree char *post = NULL;
@@ -200,9 +232,11 @@ create_snippet (const char *body)
                      "vec3 meta_cc_linear_to_sdr (vec3 l)\n"
                      "{\n"
                      "  return meta_cc_linear_to_%s (l);\n"
-                     "}\n",
+                     "}\n"
+                     "%s",
                      color_functions,
-                     get_sdr_transfer (), get_sdr_transfer ());
+                     get_sdr_transfer (), get_sdr_transfer (),
+                     extra_declarations ? extra_declarations : "");
   post = g_strdup_printf ("{\n"
                           "  float a = cogl_color_out.a;\n"
                           "  vec3 c = a > 0.0 ? cogl_color_out.rgb / a\n"
@@ -228,8 +262,29 @@ meta_color_transform_get_composite_to_pq_snippet (void)
   static CoglSnippet *snippet = NULL;
 
   if (!snippet)
-    snippet = create_snippet (
+    snippet = create_snippet (NULL,
       "  vec3 l = meta_cc_sdr_to_linear (c) *\n"
+      "           (meta_cc_sdr_white / 10000.0);\n"
+      "  c = meta_cc_linear_to_pq (max (meta_cc_bt709_to_bt2020 * l, 0.0));\n");
+
+  return snippet;
+}
+
+/**
+ * meta_color_transform_get_composite_to_pq_lut_snippet: (skip)
+ *
+ * Returns: (transfer none): like
+ *   meta_color_transform_get_composite_to_pq_snippet(), applying the gamma
+ *   ramp set with meta_color_transform_set_lut() first
+ */
+CoglSnippet *
+meta_color_transform_get_composite_to_pq_lut_snippet (void)
+{
+  static CoglSnippet *snippet = NULL;
+
+  if (!snippet)
+    snippet = create_snippet (lut_functions,
+      "  vec3 l = meta_cc_sdr_to_linear (meta_cc_apply_lut (c)) *\n"
       "           (meta_cc_sdr_white / 10000.0);\n"
       "  c = meta_cc_linear_to_pq (max (meta_cc_bt709_to_bt2020 * l, 0.0));\n");
 
@@ -248,7 +303,7 @@ meta_color_transform_get_pq_to_composite_snippet (void)
   static CoglSnippet *snippet = NULL;
 
   if (!snippet)
-    snippet = create_snippet (
+    snippet = create_snippet (NULL,
       "  vec3 l = meta_cc_tone_map (meta_cc_pq_to_linear (c),\n"
       "                             meta_cc_src_peak, meta_cc_dst_peak) *\n"
       "           (10000.0 / meta_cc_sdr_white);\n"
@@ -299,4 +354,44 @@ meta_color_transform_set_peaks (CoglPipeline *pipeline,
                                 cogl_pipeline_get_uniform_location (pipeline,
                                                                     "meta_cc_dst_peak"),
                                 dst_peak);
+}
+
+
+/**
+ * meta_color_transform_set_lut: (skip)
+ * @pipeline: a pipeline with the composite to PQ LUT snippet
+ * @size: the number of entries of the ramps
+ * @red: (array length=size): the red ramp, 0 to 65535
+ * @green: (array length=size): the green ramp
+ * @blue: (array length=size): the blue ramp
+ *
+ * Sets the gamma ramp the snippet applies, resampled to its size.
+ */
+void
+meta_color_transform_set_lut (CoglPipeline         *pipeline,
+                              size_t                size,
+                              const unsigned short *red,
+                              const unsigned short *green,
+                              const unsigned short *blue)
+{
+  float values[LUT_SIZE * 3];
+  int i;
+
+  for (i = 0; i < LUT_SIZE; i++)
+    {
+      /* the ramp entry at i / (LUT_SIZE - 1) of its range, interpolated */
+      double pos = (double) i * (size - 1) / (LUT_SIZE - 1);
+      size_t j = MIN ((size_t) pos, size - 1);
+      size_t k = MIN (j + 1, size - 1);
+      double f = pos - j;
+
+      values[i * 3 + 0] = (red[j] + (red[k] - (double) red[j]) * f) / 65535.0;
+      values[i * 3 + 1] = (green[j] + (green[k] - (double) green[j]) * f) / 65535.0;
+      values[i * 3 + 2] = (blue[j] + (blue[k] - (double) blue[j]) * f) / 65535.0;
+    }
+
+  cogl_pipeline_set_uniform_float (pipeline,
+                                   cogl_pipeline_get_uniform_location (pipeline,
+                                                                       "meta_cc_lut"),
+                                   3, LUT_SIZE, values);
 }

@@ -41,6 +41,16 @@ struct _MetaKmsCrtc
   MetaKmsCrtcState current_state;
 
   uint32_t vrr_enabled_prop_id;
+
+  /* The gamma ramp clients asked for: on outputs in the BT.2100 color mode
+   * the compositor applies it before converting to PQ, and the hardware
+   * ramp stays neutral */
+  struct {
+    int size;
+    uint16_t *red;
+    uint16_t *green;
+    uint16_t *blue;
+  } wanted_gamma;
 };
 
 G_DEFINE_TYPE (MetaKmsCrtc, meta_kms_crtc, G_TYPE_OBJECT)
@@ -54,6 +64,61 @@ meta_kms_crtc_set_gamma (MetaKmsCrtc    *crtc,
                          const uint16_t *blue)
 {
   meta_kms_update_set_crtc_gamma (update, crtc, size, red, green, blue);
+}
+
+void
+meta_kms_crtc_set_wanted_gamma (MetaKmsCrtc    *crtc,
+                                int             size,
+                                const uint16_t *red,
+                                const uint16_t *green,
+                                const uint16_t *blue)
+{
+  g_clear_pointer (&crtc->wanted_gamma.red, g_free);
+  g_clear_pointer (&crtc->wanted_gamma.green, g_free);
+  g_clear_pointer (&crtc->wanted_gamma.blue, g_free);
+  crtc->wanted_gamma.size = size;
+  if (size > 0)
+    {
+      crtc->wanted_gamma.red = g_memdup2 (red, size * sizeof (*red));
+      crtc->wanted_gamma.green = g_memdup2 (green, size * sizeof (*green));
+      crtc->wanted_gamma.blue = g_memdup2 (blue, size * sizeof (*blue));
+    }
+}
+
+/* The gamma ramp clients asked for; FALSE if none */
+gboolean
+meta_kms_crtc_get_wanted_gamma (MetaKmsCrtc     *crtc,
+                                int             *size,
+                                const uint16_t **red,
+                                const uint16_t **green,
+                                const uint16_t **blue)
+{
+  if (crtc->wanted_gamma.size <= 0)
+    return FALSE;
+
+  *size = crtc->wanted_gamma.size;
+  *red = crtc->wanted_gamma.red;
+  *green = crtc->wanted_gamma.green;
+  *blue = crtc->wanted_gamma.blue;
+  return TRUE;
+}
+
+/* Sets a neutral ramp of the hardware's size, if it has one */
+void
+meta_kms_crtc_set_neutral_gamma (MetaKmsCrtc   *crtc,
+                                 MetaKmsUpdate *update)
+{
+  int size = crtc->current_state.gamma.size;
+  g_autofree uint16_t *ramp = NULL;
+  int i;
+
+  if (size <= 1)
+    return;
+
+  ramp = g_new (uint16_t, size);
+  for (i = 0; i < size; i++)
+    ramp[i] = (uint16_t) ((i * 65535) / (size - 1));
+  meta_kms_update_set_crtc_gamma (update, crtc, size, ramp, ramp, ramp);
 }
 
 MetaKmsDevice *
@@ -270,6 +335,10 @@ meta_kms_crtc_finalize (GObject *object)
   MetaKmsCrtc *crtc = META_KMS_CRTC (object);
 
   clear_gamma_state (crtc);
+
+  g_free (crtc->wanted_gamma.red);
+  g_free (crtc->wanted_gamma.green);
+  g_free (crtc->wanted_gamma.blue);
 
   G_OBJECT_CLASS (meta_kms_crtc_parent_class)->finalize (object);
 }

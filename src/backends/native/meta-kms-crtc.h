@@ -47,6 +47,21 @@ G_DECLARE_FINAL_TYPE (MetaKmsCrtc, meta_kms_crtc,
                       META, KMS_CRTC,
                       GObject)
 
+void meta_kms_crtc_set_wanted_gamma (MetaKmsCrtc    *crtc,
+                                     int             size,
+                                     const uint16_t *red,
+                                     const uint16_t *green,
+                                     const uint16_t *blue);
+
+gboolean meta_kms_crtc_get_wanted_gamma (MetaKmsCrtc     *crtc,
+                                         int             *size,
+                                         const uint16_t **red,
+                                         const uint16_t **green,
+                                         const uint16_t **blue);
+
+void meta_kms_crtc_set_neutral_gamma (MetaKmsCrtc   *crtc,
+                                      MetaKmsUpdate *update);
+
 void meta_kms_crtc_set_gamma (MetaKmsCrtc    *crtc,
                               MetaKmsUpdate  *update,
                               int             size,

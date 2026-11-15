@@ -127,6 +127,24 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
                                          kms_update,
                                          meta_gpu_kms_get_fd (META_GPU_KMS (output->gpu)),
                                          output->color_mode);
+
+      /* In the BT.2100 color mode the view applies the gamma ramp before
+       * converting to PQ, so the hardware's is neutral; back in SDR the
+       * hardware applies it again */
+      if (meta_output_get_assigned_crtc (output))
+        {
+          MetaKmsCrtc *kms_crtc =
+            meta_crtc_kms_get_kms_crtc (meta_output_get_assigned_crtc (output));
+          const uint16_t *red, *green, *blue;
+          int size;
+
+          if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+            meta_kms_crtc_set_neutral_gamma (kms_crtc, kms_update);
+          else if (meta_kms_crtc_get_wanted_gamma (kms_crtc, &size,
+                                                   &red, &green, &blue))
+            meta_kms_crtc_set_gamma (kms_crtc, kms_update,
+                                     size, red, green, blue);
+        }
     }
 
   if (output->supported_color_formats & (1 << output->color_format))

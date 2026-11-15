@@ -3871,6 +3871,18 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                        NULL);
   g_clear_pointer (&offscreen, cogl_object_unref);
 
+  /* A view in the BT.2100 color mode applies the CRTC's gamma ramp */
+  if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+    {
+      MetaKmsCrtc *kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
+      const uint16_t *red, *green, *blue;
+      int size;
+
+      if (meta_kms_crtc_get_wanted_gamma (kms_crtc, &size,
+                                          &red, &green, &blue))
+        meta_renderer_view_set_gamma (view, size, red, green, blue);
+    }
+
   meta_onscreen_native_set_view (onscreen, view);
 
   if (!meta_onscreen_native_allocate (onscreen, &error))
