@@ -46,6 +46,65 @@ typedef struct _MetaOutputKms
   MetaKmsConnector *kms_connector;
 } MetaOutputKms;
 
+/**
+ * meta_output_kms_get_gamma: (skip)
+ *
+ * The gamma ramp for @output's CRTC: the one clients set (Night Light), or a
+ * neutral one, with the output's color correction applied on top.  FALSE if
+ * there is nothing to apply.  The ramps are newly allocated.
+ */
+gboolean
+meta_output_kms_get_gamma (MetaOutput  *output,
+                           int         *size_out,
+                           uint16_t   **red_out,
+                           uint16_t   **green_out,
+                           uint16_t   **blue_out)
+{
+  MetaCrtc *crtc = meta_output_get_assigned_crtc (output);
+  MetaKmsCrtc *kms_crtc;
+  const uint16_t *red, *green, *blue;
+  gboolean have_wanted;
+  int size, i;
+
+  if (!crtc)
+    return FALSE;
+
+  kms_crtc = meta_crtc_kms_get_kms_crtc (crtc);
+  have_wanted = meta_kms_crtc_get_wanted_gamma (kms_crtc, &size,
+                                                &red, &green, &blue);
+  if (!have_wanted)
+    {
+      if (meta_color_correction_is_neutral (&output->color_correction))
+        return FALSE;
+      size = meta_kms_crtc_get_current_state (kms_crtc)->gamma.size;
+      if (size < 2)
+        size = 256;
+    }
+
+  *size_out = size;
+  *red_out = g_new (uint16_t, size);
+  *green_out = g_new (uint16_t, size);
+  *blue_out = g_new (uint16_t, size);
+  for (i = 0; i < size; i++)
+    {
+      if (have_wanted)
+        {
+          (*red_out)[i] = red[i];
+          (*green_out)[i] = green[i];
+          (*blue_out)[i] = blue[i];
+        }
+      else
+        {
+          (*red_out)[i] = (*green_out)[i] = (*blue_out)[i] =
+            (uint16_t) ((i * 65535) / (size - 1));
+        }
+    }
+
+  meta_color_correction_apply (&output->color_correction, size,
+                               *red_out, *green_out, *blue_out);
+  return TRUE;
+}
+
 MetaKmsConnector *
 meta_output_kms_get_kms_connector (MetaOutput *output)
 {
@@ -128,23 +187,24 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
                                          meta_gpu_kms_get_fd (META_GPU_KMS (output->gpu)),
                                          output->color_mode);
 
-      /* In the BT.2100 color mode the view applies the gamma ramp before
-       * converting to PQ, so the hardware's is neutral; back in SDR the
-       * hardware applies it again */
-      if (meta_output_get_assigned_crtc (output))
-        {
-          MetaKmsCrtc *kms_crtc =
-            meta_crtc_kms_get_kms_crtc (meta_output_get_assigned_crtc (output));
-          const uint16_t *red, *green, *blue;
-          int size;
+    }
 
-          if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
-            meta_kms_crtc_set_neutral_gamma (kms_crtc, kms_update);
-          else if (meta_kms_crtc_get_wanted_gamma (kms_crtc, &size,
-                                                   &red, &green, &blue))
-            meta_kms_crtc_set_gamma (kms_crtc, kms_update,
-                                     size, red, green, blue);
-        }
+  /* In the BT.2100 color mode the view applies the gamma ramp before
+   * converting to PQ, so the hardware's is neutral; in SDR the hardware
+   * applies it, with the color correction */
+  if (meta_output_get_assigned_crtc (output))
+    {
+      MetaKmsCrtc *kms_crtc =
+        meta_crtc_kms_get_kms_crtc (meta_output_get_assigned_crtc (output));
+      g_autofree uint16_t *red = NULL;
+      g_autofree uint16_t *green = NULL;
+      g_autofree uint16_t *blue = NULL;
+      int size;
+
+      if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+        meta_kms_crtc_set_neutral_gamma (kms_crtc, kms_update);
+      else if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
+        meta_kms_crtc_set_gamma (kms_crtc, kms_update, size, red, green, blue);
     }
 
   if (output->supported_color_formats & (1 << output->color_format))
@@ -511,6 +571,8 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
     }
 
   meta_output_parse_edid (output, connector_state->edid_data);
+  meta_color_correction_load (output->vendor, output->product, output->serial,
+                              &output->color_correction);
 
   output->connector_type = meta_kms_connector_get_connector_type (kms_connector);
 
