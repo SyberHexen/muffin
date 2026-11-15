@@ -43,6 +43,8 @@ void meta_wayland_color_management_update_surface (MetaWaylandSurface *surface);
  * logical monitor in fullscreen to its window. */
 void meta_wayland_color_management_update_fullscreen (GHashTable *fullscreen_windows);
 
+gboolean meta_wayland_color_management_is_auto_switched (const char *connector);
+
 /* Drop the color management objects of a surface being destroyed */
 void meta_wayland_color_management_surface_destroyed (MetaWaylandSurface *surface);
 
