@@ -248,6 +248,17 @@ meta_window_wayland_grab_op_ended (MetaWindow *window,
   if (meta_grab_op_is_resizing (op))
     surface_state_changed (window);
 
+  /* The main monitor was kept while the window was moved (see
+   * meta_window_wayland_update_main_monitor()); settle it now and tell the
+   * client its scale, which nothing else does if the window stays put */
+  if (meta_grab_op_is_moving (op))
+    {
+      meta_window_update_monitor (window,
+                                  META_WINDOW_UPDATE_MONITOR_FLAGS_USER_OP);
+      if (window->surface)
+        meta_wayland_surface_update_outputs_recursively (window->surface);
+    }
+
   META_WINDOW_CLASS (meta_window_wayland_parent_class)->grab_op_ended (window, op);
 }
 
@@ -591,6 +602,16 @@ meta_window_wayland_update_main_monitor (MetaWindow                   *window,
       window->monitor = to;
       return;
     }
+
+  /* While the user moves the window, keep its main monitor, and so the scale
+   * its client is told: clients that resize themselves for a new scale (as
+   * Windows applications under Wine do) would otherwise grow or shrink
+   * around the pointer, back onto the old monitor, and flip between the two
+   * for as long as the window is held at the border.  It is settled when the
+   * move ends. */
+  if (window->display->grab_window == window &&
+      meta_grab_op_is_moving (window->display->grab_op))
+    return;
 
   if (meta_is_stage_views_scaled ())
     {
