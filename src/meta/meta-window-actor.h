@@ -51,6 +51,14 @@ META_EXPORT
 cairo_surface_t * meta_window_actor_get_image (MetaWindowActor       *self,
                                                cairo_rectangle_int_t *clip);
 
+META_EXPORT
+GBytes * meta_window_actor_get_thumbnail (MetaWindowActor *self,
+                                          int              max_width,
+                                          int              max_height,
+                                          int             *width,
+                                          int             *height,
+                                          int             *stride);
+
 typedef enum
 {
   META_SHADOW_MODE_AUTO,
