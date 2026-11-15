@@ -33,4 +33,6 @@ MetaOutputColorMode meta_renderer_view_get_color_mode (MetaRendererView *view);
 
 float meta_renderer_view_get_sdr_white_level (MetaRendererView *view);
 
+float meta_renderer_view_get_hdr_peak_luminance (MetaRendererView *view);
+
 #endif /* META_RENDERER_VIEW_H */
