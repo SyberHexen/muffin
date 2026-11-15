@@ -22,6 +22,10 @@
 
 #include "cogl/cogl.h"
 
+/* The SDR white levels allowed, in cd/m² */
+#define META_MIN_SDR_WHITE_LEVEL 80
+#define META_MAX_SDR_WHITE_LEVEL 1000
+
 /* The luminance SDR white is shown at on outputs in the BT.2100 color mode,
  * in cd/m²: 203 unless MUFFIN_HDR_SDR_WHITE_NITS says otherwise */
 float meta_color_transform_get_sdr_white_nits (void);

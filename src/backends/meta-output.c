@@ -21,6 +21,8 @@
 
 #include "backends/meta-output.h"
 
+#include "backends/meta-color-transform.h"
+
 typedef struct _MetaOutputPrivate
 {
   /* The CRTC driving this output, NULL if the output is not enabled */
@@ -33,6 +35,14 @@ MetaGpu *
 meta_output_get_gpu (MetaOutput *output)
 {
   return output->gpu;
+}
+
+/* The luminance SDR white is shown at in the BT.2100 color mode, cd/m² */
+float
+meta_output_get_sdr_white_level (MetaOutput *output)
+{
+  return output->sdr_white_level ? output->sdr_white_level
+                                 : meta_color_transform_get_sdr_white_nits ();
 }
 
 const char *

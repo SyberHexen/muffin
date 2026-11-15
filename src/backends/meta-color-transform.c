@@ -40,8 +40,6 @@
 #include <stdlib.h>
 
 #define DEFAULT_SDR_WHITE_NITS 203.0f  /* ITU-R BT.2408 reference white */
-#define MIN_SDR_WHITE_NITS 80.0f
-#define MAX_SDR_WHITE_NITS 1000.0f
 
 static const char color_functions[] =
   /* sRGB, extended to values past [0, 1] by mirroring and continuing */
@@ -124,12 +122,12 @@ meta_color_transform_get_sdr_white_nits (void)
         {
           float value = g_ascii_strtod (env, NULL);
 
-          if (value >= MIN_SDR_WHITE_NITS && value <= MAX_SDR_WHITE_NITS)
+          if (value >= META_MIN_SDR_WHITE_LEVEL && value <= META_MAX_SDR_WHITE_LEVEL)
             nits = value;
           else
             g_warning ("Ignoring MUFFIN_HDR_SDR_WHITE_NITS=%s: "
-                       "not between %.0f and %.0f",
-                       env, MIN_SDR_WHITE_NITS, MAX_SDR_WHITE_NITS);
+                       "not between %d and %d",
+                       env, META_MIN_SDR_WHITE_LEVEL, META_MAX_SDR_WHITE_LEVEL);
         }
     }
 
