@@ -32,6 +32,7 @@
 
 #include "backends/meta-renderer-view.h"
 
+#include "backends/meta-color-transform.h"
 #include "backends/meta-renderer.h"
 #include "clutter/clutter-muffin.h"
 #include "compositor/region-utils.h"
@@ -41,6 +42,7 @@ enum
   PROP_0,
 
   PROP_TRANSFORM,
+  PROP_COLOR_MODE,
 
   PROP_LAST
 };
@@ -52,6 +54,7 @@ struct _MetaRendererView
   ClutterStageViewCogl parent;
 
   MetaMonitorTransform transform;
+  MetaOutputColorMode color_mode;
 };
 
 G_DEFINE_TYPE (MetaRendererView, meta_renderer_view,
@@ -61,6 +64,12 @@ MetaMonitorTransform
 meta_renderer_view_get_transform (MetaRendererView *view)
 {
   return view->transform;
+}
+
+MetaOutputColorMode
+meta_renderer_view_get_color_mode (MetaRendererView *view)
+{
+  return view->color_mode;
 }
 
 static void
@@ -116,6 +125,11 @@ meta_renderer_view_setup_offscreen_blit_pipeline (ClutterStageView *view,
 
   meta_renderer_view_get_offscreen_transformation_matrix (view, &matrix);
   cogl_pipeline_set_layer_matrix (pipeline, 0, &matrix);
+
+  /* The view was composited in the SDR encoding; the output takes PQ */
+  if (META_RENDERER_VIEW (view)->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+    cogl_pipeline_add_snippet (pipeline,
+                               meta_color_transform_get_composite_to_pq_snippet ());
 }
 
 static void
@@ -161,6 +175,9 @@ meta_renderer_view_get_property (GObject    *object,
     case PROP_TRANSFORM:
       g_value_set_uint (value, view->transform);
       break;
+    case PROP_COLOR_MODE:
+      g_value_set_uint (value, view->color_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -179,6 +196,10 @@ meta_renderer_view_set_property (GObject      *object,
     {
     case PROP_TRANSFORM:
       meta_renderer_view_set_transform (view, g_value_get_uint (value));
+      break;
+    case PROP_COLOR_MODE:
+      view->color_mode = g_value_get_uint (value);
+      clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -214,6 +235,18 @@ meta_renderer_view_class_init (MetaRendererViewClass *klass)
                        META_MONITOR_TRANSFORM_NORMAL,
                        META_MONITOR_TRANSFORM_FLIPPED_270,
                        META_MONITOR_TRANSFORM_NORMAL,
+                       G_PARAM_READWRITE |
+                       G_PARAM_CONSTRUCT_ONLY |
+                       G_PARAM_STATIC_STRINGS);
+
+  obj_props[PROP_COLOR_MODE] =
+    g_param_spec_uint ("color-mode",
+                       "Color mode",
+                       "Color mode of the view's output; in the BT.2100 mode "
+                       "the view is composited offscreen and converted",
+                       META_OUTPUT_COLOR_MODE_DEFAULT,
+                       META_OUTPUT_COLOR_MODE_LAST,
+                       META_OUTPUT_COLOR_MODE_DEFAULT,
                        G_PARAM_READWRITE |
                        G_PARAM_CONSTRUCT_ONLY |
                        G_PARAM_STATIC_STRINGS);
