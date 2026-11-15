@@ -51,6 +51,7 @@ CLUTTER_EXPORT
 void clutter_stage_capture_into (ClutterStage          *stage,
                                  gboolean               paint,
                                  cairo_rectangle_int_t *rect,
+                                 float                  scale,
                                  uint8_t               *data);
 
 CLUTTER_EXPORT
