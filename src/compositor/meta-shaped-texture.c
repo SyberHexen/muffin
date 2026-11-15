@@ -557,20 +557,29 @@ get_sdr_white_level (ClutterPaintContext *paint_context)
   return meta_color_transform_get_sdr_white_nits ();
 }
 
+static gboolean
+is_painting_hdr (ClutterPaintContext *paint_context)
+{
+  ClutterStageView *view = clutter_paint_context_get_stage_view (paint_context);
+
+  return view && META_IS_RENDERER_VIEW (view) &&
+         meta_renderer_view_get_color_mode (META_RENDERER_VIEW (view)) ==
+         META_OUTPUT_COLOR_MODE_BT2100;
+}
+
 /* The peak luminance HDR content is tone mapped to: that of the display of
- * the view being painted when it is in the BT.2100 color mode, 0 (no tone
- * mapping) elsewhere */
+ * the view being painted when it is in the BT.2100 color mode (0, no tone
+ * mapping, if unknown); SDR white elsewhere, which is all an SDR output (or
+ * a screenshot) shows */
 static float
 get_display_peak (ClutterPaintContext *paint_context)
 {
   ClutterStageView *view = clutter_paint_context_get_stage_view (paint_context);
 
-  if (view && META_IS_RENDERER_VIEW (view) &&
-      meta_renderer_view_get_color_mode (META_RENDERER_VIEW (view)) ==
-      META_OUTPUT_COLOR_MODE_BT2100)
+  if (is_painting_hdr (paint_context))
     return meta_renderer_view_get_hdr_peak_luminance (META_RENDERER_VIEW (view));
 
-  return 0;
+  return get_sdr_white_level (paint_context);
 }
 
 static void
@@ -582,6 +591,8 @@ set_color_uniforms (MetaShapedTexture   *stex,
                                       get_sdr_white_level (paint_context));
   meta_color_transform_set_peaks (pipeline, stex->content_peak,
                                   get_display_peak (paint_context));
+  meta_color_transform_set_gamut_clip (pipeline,
+                                       !is_painting_hdr (paint_context));
 }
 
 static void

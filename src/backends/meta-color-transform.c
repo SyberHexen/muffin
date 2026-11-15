@@ -119,6 +119,25 @@ static const char color_functions[] =
   "  return l * (meta_cc_pq_to_linear (vec3 (e2 * src)).x / m);\n"
   "}\n"
   "\n"
+  /* Brings linear BT.709 colors (1.0 at SDR white) into what an SDR output
+   * shows, [0, 1], by moving them toward the gray of their luminance just
+   * as far as needed: luminance and hue are kept, only saturation is lost,
+   * where clipping each component would shift hues */
+  "vec3 meta_cc_clip_to_sdr (vec3 l)\n"
+  "{\n"
+  "  float y = dot (l, vec3 (0.2126, 0.7152, 0.0722));\n"
+  "  if (y <= 0.0)\n"
+  "    return vec3 (0.0);\n"
+  "  if (y >= 1.0)\n"
+  "    return vec3 (1.0);\n"
+  "  vec3 d = l - vec3 (y);\n"
+  "  vec3 lo = mix (vec3 (1.0), vec3 (y) / max (-d, 1e-6), step (l, vec3 (0.0)));\n"
+  "  vec3 hi = mix (vec3 (1.0), vec3 (1.0 - y) / max (d, 1e-6),\n"
+  "                 step (vec3 (1.0), l));\n"
+  "  vec3 t = min (lo, hi);\n"
+  "  return vec3 (y) + min (min (t.r, t.g), t.b) * d;\n"
+  "}\n"
+  "\n"
   /* Linear BT.709 <-> BT.2020 primaries, derived from their chromaticities
    * and D65 (as in ITU-R BT.2087) and exact inverses of each other, so HDR10
    * content survives the round trip; column major */
@@ -303,11 +322,14 @@ meta_color_transform_get_pq_to_composite_snippet (void)
   static CoglSnippet *snippet = NULL;
 
   if (!snippet)
-    snippet = create_snippet (NULL,
+    snippet = create_snippet ("uniform float meta_cc_gamut_clip;\n",
       "  vec3 l = meta_cc_tone_map (meta_cc_pq_to_linear (c),\n"
       "                             meta_cc_src_peak, meta_cc_dst_peak) *\n"
       "           (10000.0 / meta_cc_sdr_white);\n"
-      "  c = meta_cc_linear_to_sdr (meta_cc_bt2020_to_bt709 * l);\n");
+      "  l = meta_cc_bt2020_to_bt709 * l;\n"
+      "  if (meta_cc_gamut_clip > 0.5)\n"
+      "    l = meta_cc_clip_to_sdr (l);\n"
+      "  c = meta_cc_linear_to_sdr (l);\n");
 
   return snippet;
 }
@@ -356,6 +378,24 @@ meta_color_transform_set_peaks (CoglPipeline *pipeline,
                                 dst_peak);
 }
 
+/**
+ * meta_color_transform_set_gamut_clip: (skip)
+ * @pipeline: a pipeline with the PQ to composite snippet
+ * @clip: whether the content is painted for an SDR output
+ *
+ * Content painted for an SDR output is brought into its range (see
+ * meta_cc_clip_to_sdr) instead of being clipped per component; for an
+ * output in the BT.2100 color mode it is left past it.
+ */
+void
+meta_color_transform_set_gamut_clip (CoglPipeline *pipeline,
+                                     gboolean      clip)
+{
+  cogl_pipeline_set_uniform_1f (pipeline,
+                                cogl_pipeline_get_uniform_location (pipeline,
+                                                                    "meta_cc_gamut_clip"),
+                                clip ? 1.0f : 0.0f);
+}
 
 /**
  * meta_color_transform_set_lut: (skip)
