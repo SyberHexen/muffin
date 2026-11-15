@@ -111,6 +111,15 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
 
   if (output->supported_color_modes & (1 << output->color_mode))
     {
+      /* The EDID's frame average and minimum describe the display only
+       * along with its peak; a peak the user set comes alone */
+      float peak = meta_output_get_hdr_peak_luminance (output);
+      gboolean from_edid = !output->hdr_peak_luminance;
+
+      meta_kms_connector_set_hdr_luminance (output_kms->kms_connector,
+                                            peak,
+                                            from_edid ? output->edid_max_frame_avg : 0,
+                                            from_edid ? output->edid_min_luminance : 0);
       g_debug ("Setting color mode of connector %s to %d",
                meta_kms_connector_get_name (output_kms->kms_connector),
                output->color_mode);
