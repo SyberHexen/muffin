@@ -44,6 +44,7 @@ enum
   PROP_TRANSFORM,
   PROP_COLOR_MODE,
   PROP_SDR_WHITE_LEVEL,
+  PROP_HDR_PEAK_LUMINANCE,
 
   PROP_LAST
 };
@@ -57,6 +58,7 @@ struct _MetaRendererView
   MetaMonitorTransform transform;
   MetaOutputColorMode color_mode;
   float sdr_white_level;
+  float hdr_peak_luminance;
 };
 
 G_DEFINE_TYPE (MetaRendererView, meta_renderer_view,
@@ -78,6 +80,12 @@ float
 meta_renderer_view_get_sdr_white_level (MetaRendererView *view)
 {
   return view->sdr_white_level;
+}
+
+float
+meta_renderer_view_get_hdr_peak_luminance (MetaRendererView *view)
+{
+  return view->hdr_peak_luminance;
 }
 
 static void
@@ -193,6 +201,9 @@ meta_renderer_view_get_property (GObject    *object,
     case PROP_SDR_WHITE_LEVEL:
       g_value_set_float (value, view->sdr_white_level);
       break;
+    case PROP_HDR_PEAK_LUMINANCE:
+      g_value_set_float (value, view->hdr_peak_luminance);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -219,6 +230,9 @@ meta_renderer_view_set_property (GObject      *object,
     case PROP_SDR_WHITE_LEVEL:
       view->sdr_white_level = g_value_get_float (value);
       clutter_stage_view_invalidate_offscreen_blit_pipeline (CLUTTER_STAGE_VIEW (view));
+      break;
+    case PROP_HDR_PEAK_LUMINANCE:
+      view->hdr_peak_luminance = g_value_get_float (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -278,6 +292,18 @@ meta_renderer_view_class_init (MetaRendererViewClass *klass)
                         META_MIN_SDR_WHITE_LEVEL,
                         META_MAX_SDR_WHITE_LEVEL,
                         203.0f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_CONSTRUCT_ONLY |
+                        G_PARAM_STATIC_STRINGS);
+
+  obj_props[PROP_HDR_PEAK_LUMINANCE] =
+    g_param_spec_float ("hdr-peak-luminance",
+                        "HDR peak luminance",
+                        "Peak luminance of the view's display in cd/m², "
+                        "which HDR content is tone mapped to; 0 if unknown",
+                        0.0f,
+                        META_MAX_HDR_PEAK_LUMINANCE,
+                        0.0f,
                         G_PARAM_READWRITE |
                         G_PARAM_CONSTRUCT_ONLY |
                         G_PARAM_STATIC_STRINGS);

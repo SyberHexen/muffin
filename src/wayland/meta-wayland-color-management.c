@@ -218,6 +218,20 @@ meta_wayland_color_description_unref (MetaWaylandColorDescription *description)
     g_free (description);
 }
 
+/* The peak luminance of the content, in cd/m², for tone mapping: its
+ * maximum content light level, else the peak of its mastering display, else
+ * 1000, the most common HDR10 grading target */
+float
+meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description)
+{
+  if (description && description->max_cll > 0)
+    return description->max_cll;
+  if (description && description->has_target_luminance &&
+      description->target_max_lum > 0)
+    return description->target_max_lum;
+  return 1000.0f;
+}
+
 gboolean
 meta_wayland_color_description_is_hdr10 (MetaWaylandColorDescription *description)
 {
