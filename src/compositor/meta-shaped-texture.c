@@ -1382,6 +1382,11 @@ meta_shaped_texture_should_get_via_offscreen (MetaShapedTexture *stex)
   if (!cogl_texture_is_get_data_supported (stex->texture))
     return TRUE;
 
+  /* Content in other colors (HDR10, HLG, P3, scRGB) is converted when
+   * painted; its raw texels are not what is shown */
+  if (stex->color_snippet)
+    return TRUE;
+
   if (stex->has_viewport_src_rect || stex->has_viewport_dst_size)
     return TRUE;
 
