@@ -1164,6 +1164,28 @@ meta_window_actor_get_geometry_scale (MetaWindowActor *window_actor)
   return priv->geometry_scale;
 }
 
+/* The scale windows are captured at for screen casts: that of the window's
+ * buffer, so a cast shows it at the resolution the client drew it, as
+ * meta_window_actor_get_image() does, and not at the actor's resource scale,
+ * which is the highest monitor scale in use (2 with any monitor at 1.5),
+ * whatever the window's monitor. */
+static float
+get_capture_scale (MetaWindowActor *window_actor)
+{
+  MetaWindowActorPrivate *priv =
+    meta_window_actor_get_instance_private (window_actor);
+  MetaShapedTexture *stex;
+  float viewport_scale;
+
+  stex = meta_surface_actor_get_texture (priv->surface);
+  if (clutter_actor_get_n_children (CLUTTER_ACTOR (window_actor)) == 1 &&
+      meta_shaped_texture_get_viewport_scale (stex, &viewport_scale) &&
+      viewport_scale >= 1.0f)
+    return viewport_scale;
+
+  return meta_shaped_texture_get_buffer_scale (stex);
+}
+
 static void
 meta_window_actor_get_buffer_bounds (MetaScreenCastWindow *screen_cast_window,
                                      MetaRectangle        *bounds)
@@ -1172,13 +1194,13 @@ meta_window_actor_get_buffer_bounds (MetaScreenCastWindow *screen_cast_window,
   MetaWindowActorPrivate *priv =
     meta_window_actor_get_instance_private (window_actor);
   MetaShapedTexture *stex;
-  int buffer_scale;
+  float scale;
 
   stex = meta_surface_actor_get_texture (priv->surface);
-  buffer_scale = meta_shaped_texture_get_buffer_scale (stex);
+  scale = get_capture_scale (window_actor);
   *bounds = (MetaRectangle) {
-    .width = meta_shaped_texture_get_width (stex) * buffer_scale,
-    .height = meta_shaped_texture_get_height (stex) * buffer_scale,
+    .width = (int) ceilf (meta_shaped_texture_get_width (stex) * scale),
+    .height = (int) ceilf (meta_shaped_texture_get_height (stex) * scale),
   };
 }
 
@@ -1256,6 +1278,71 @@ meta_window_actor_transform_cursor_position (MetaScreenCastWindow *screen_cast_w
   return TRUE;
 }
 
+static gboolean meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
+                                                       MetaRectangle        *bounds,
+                                                       CoglFramebuffer      *framebuffer);
+
+static gboolean
+capture_needs_paint (MetaWindowActor *window_actor)
+{
+  MetaWindowActorPrivate *priv =
+    meta_window_actor_get_instance_private (window_actor);
+  MetaShapedTexture *stex = meta_surface_actor_get_texture (priv->surface);
+
+  return clutter_actor_get_n_children (CLUTTER_ACTOR (window_actor)) != 1 ||
+         meta_shaped_texture_should_get_via_offscreen (stex);
+}
+
+/* Paints the window into @data, @bounds sized and tightly packed */
+static gboolean
+capture_by_painting (MetaWindowActor *window_actor,
+                     MetaRectangle   *bounds,
+                     uint8_t         *data)
+{
+  MetaBackend *backend = meta_get_backend ();
+  ClutterBackend *clutter_backend = meta_backend_get_clutter_backend (backend);
+  CoglContext *cogl_context =
+    clutter_backend_get_cogl_context (clutter_backend);
+  g_autoptr (GError) error = NULL;
+  CoglTexture2D *texture;
+  CoglOffscreen *offscreen;
+  CoglFramebuffer *framebuffer;
+  gboolean ret = FALSE;
+
+  texture = cogl_texture_2d_new_with_size (cogl_context,
+                                           bounds->width, bounds->height);
+  if (!texture)
+    return FALSE;
+
+  offscreen = cogl_offscreen_new_with_texture (COGL_TEXTURE (texture));
+  framebuffer = COGL_FRAMEBUFFER (offscreen);
+  cogl_object_unref (texture);
+
+  if (!cogl_framebuffer_allocate (framebuffer, &error))
+    {
+      g_warning ("Failed to allocate framebuffer for screen cast: %s",
+                 error->message);
+      goto out;
+    }
+
+  if (!meta_window_actor_blit_to_framebuffer (META_SCREEN_CAST_WINDOW (window_actor),
+                                              &(MetaRectangle) {
+                                                .width = bounds->width,
+                                                .height = bounds->height,
+                                              },
+                                              framebuffer))
+    goto out;
+
+  cogl_framebuffer_read_pixels (framebuffer, 0, 0,
+                                bounds->width, bounds->height,
+                                CLUTTER_CAIRO_FORMAT_ARGB32, data);
+  ret = TRUE;
+
+out:
+  cogl_object_unref (framebuffer);
+  return ret;
+}
+
 static void
 meta_window_actor_capture_into (MetaScreenCastWindow *screen_cast_window,
                                 MetaRectangle        *bounds,
@@ -1270,6 +1357,14 @@ meta_window_actor_capture_into (MetaScreenCastWindow *screen_cast_window,
   int bpp = 4;
 
   if (meta_window_actor_is_destroyed (window_actor))
+    return;
+
+  /* Windows of several surfaces (Wine's fullscreen windows draw in a
+   * subsurface over a 1x1 one) are painted like the DMA-BUF path paints
+   * them, at the window's capture scale; meta_window_actor_get_image() would
+   * paint them at the resource scale, larger than the stream */
+  if (capture_needs_paint (window_actor) &&
+      capture_by_painting (window_actor, bounds, data))
     return;
 
   image = meta_window_actor_get_image (window_actor, bounds);
@@ -1322,7 +1417,7 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
   ClutterPaintContext *paint_context;
   MetaRectangle scaled_clip;
   CoglColor clear_color;
-  float resource_scale;
+  float capture_scale;
   float width, height;
   float x, y;
 
@@ -1334,12 +1429,13 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
   if (width == 0 || height == 0)
     return FALSE;
 
-  resource_scale = clutter_actor_get_resource_scale (actor);
+  /* The window fills the stream's crop (its buffer bounds) */
+  capture_scale = get_capture_scale (window_actor);
 
   clutter_actor_inhibit_culling (actor);
 
-  width = ceilf (width * resource_scale);
-  height = ceilf (height * resource_scale);
+  width = ceilf (width * capture_scale);
+  height = ceilf (height * capture_scale);
 
   clutter_actor_get_position (actor, &x, &y);
 
@@ -1348,10 +1444,8 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
   cogl_framebuffer_orthographic (framebuffer, 0, 0, width, height, 0, 1.0);
   cogl_framebuffer_set_viewport (framebuffer, 0, 0, width, height);
 
-  meta_rectangle_scale_double (bounds, resource_scale,
-                               META_ROUNDING_STRATEGY_GROW,
-                               &scaled_clip);
-  meta_rectangle_intersect (&scaled_clip,
+  /* @bounds is the stream, in its pixels */
+  meta_rectangle_intersect (bounds,
                             &(MetaRectangle) {
                               .width = width,
                               .height = height,
@@ -1364,7 +1458,7 @@ meta_window_actor_blit_to_framebuffer (MetaScreenCastWindow *screen_cast_window,
                                         scaled_clip.y + scaled_clip.height);
 
   cogl_framebuffer_push_matrix (framebuffer);
-  cogl_framebuffer_scale (framebuffer, resource_scale, resource_scale, 1);
+  cogl_framebuffer_scale (framebuffer, capture_scale, capture_scale, 1);
   cogl_framebuffer_translate (framebuffer, -x, -y, 0);
 
   paint_context = clutter_paint_context_new_for_framebuffer (framebuffer);
