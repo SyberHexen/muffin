@@ -35,6 +35,8 @@ void meta_wayland_color_description_unref (MetaWaylandColorDescription *descript
 /* PQ transfer function with BT.2020 primaries, which HDR10 carries as is */
 gboolean meta_wayland_color_description_is_hdr10 (MetaWaylandColorDescription *description);
 
+float meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description);
+
 /* Re-evaluate the preferred image description after the surface moved */
 void meta_wayland_color_management_update_surface (MetaWaylandSurface *surface);
 

@@ -3867,6 +3867,7 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                        "transform", view_transform,
                        "color-mode", output->color_mode,
                        "sdr-white-level", meta_output_get_sdr_white_level (output),
+                       "hdr-peak-luminance", meta_output_get_hdr_peak_luminance (output),
                        NULL);
   g_clear_pointer (&offscreen, cogl_object_unref);
 
