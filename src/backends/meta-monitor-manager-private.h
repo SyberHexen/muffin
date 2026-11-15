@@ -233,6 +233,10 @@ struct _MetaMonitorManagerClass
                           unsigned short     *,
                           unsigned short     *);
 
+  /* Applies output->color_correction on top of the clients' gamma ramp */
+  void (*apply_color_correction) (MetaMonitorManager *,
+                                  MetaOutput         *);
+
   void (*tiled_monitor_added) (MetaMonitorManager *,
                                MetaMonitor        *);
 
