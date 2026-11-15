@@ -3489,10 +3489,10 @@ meta_display_queue_workarea_recalc (MetaDisplay *display)
 #ifdef HAVE_WAYLAND
 /*
  * The window filling each logical monitor, for HDR passthrough: the topmost
- * normal window on the monitor, if it is fullscreen or covers the monitor
- * exactly, the way games in borderless windowed mode do. Docks, menus and
- * other transient windows, and windows too small to obscure anything, are
- * looked through.
+ * window on the monitor that is fullscreen or covers the monitor exactly,
+ * the way games in borderless windowed mode do. Windows that do not fill
+ * the monitor, like overlays, docks and menus, are looked through: SDR
+ * content shown with an HDR10 window is converted when composited.
  */
 static GHashTable *
 collect_fullscreen_windows (MetaDisplay *display)
@@ -3519,15 +3519,11 @@ collect_fullscreen_windows (MetaDisplay *display)
 
       meta_window_get_frame_rect (window, &window_rect);
       if (!window->fullscreen &&
-          (window_rect.width <= MIN_FULLSCREEN_OBSCURING_WINDOW_SIZE ||
-           window_rect.height <= MIN_FULLSCREEN_OBSCURING_WINDOW_SIZE))
+          !meta_rectangle_equal (&window_rect, &logical_monitor->rect))
         continue;
 
       g_hash_table_add (decided, logical_monitor);
-
-      if (window->fullscreen ||
-          meta_rectangle_equal (&window_rect, &logical_monitor->rect))
-        g_hash_table_insert (fullscreen_windows, logical_monitor, window);
+      g_hash_table_insert (fullscreen_windows, logical_monitor, window);
     }
 
   return fullscreen_windows;
