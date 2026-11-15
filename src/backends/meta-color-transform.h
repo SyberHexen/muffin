@@ -58,6 +58,14 @@ CoglSnippet * meta_color_transform_get_to_composite_snippet (MetaColorTransformD
 void meta_color_transform_get_to_bt709 (const int32_t primaries[8],
                                         float         to_bt709[9]);
 
+void meta_color_transform_get_bt709_to_display (const double display[8],
+                                                float        to_display[9]);
+
+CoglSnippet * meta_color_transform_get_composite_to_display_snippet (void);
+
+void meta_color_transform_set_to_display (CoglPipeline *pipeline,
+                                          const float   to_display[9]);
+
 void meta_color_transform_set_content (CoglPipeline *pipeline,
                                        const float   to_bt709[9],
                                        float         unit_nits);
