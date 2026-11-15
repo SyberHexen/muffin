@@ -30,6 +30,7 @@
 
 #include "config.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -41,6 +42,7 @@
 #include <X11/extensions/Xfixes.h>
 
 #include "backends/meta-backend-private.h"
+#include "clutter/clutter-muffin.h"
 #include "backends/meta-cursor-sprite-xcursor.h"
 #include "backends/meta-cursor-tracker-private.h"
 #include "backends/meta-idle-monitor-dbus.h"
@@ -3843,6 +3845,81 @@ meta_display_get_monitor_geometry (MetaDisplay   *display,
     meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
                                                           monitor);
   *geometry = logical_monitor->rect;
+}
+
+/**
+ * meta_display_get_monitor_thumbnail:
+ * @display: a #MetaDisplay
+ * @monitor: the monitor number
+ * @max_width: the largest width of the thumbnail
+ * @max_height: the largest height of the thumbnail
+ * @width: (out): the width of the thumbnail
+ * @height: (out): the height of the thumbnail
+ * @stride: (out): its stride
+ *
+ * Paints what @monitor shows scaled down to fit @max_width x @max_height
+ * (never enlarged), without cursors.  For pickers such as the screen sharing
+ * one; cheap, as it is painted small on the GPU.
+ *
+ * Returns: (transfer full) (nullable): Cairo ARGB32 pixels
+ */
+GBytes *
+meta_display_get_monitor_thumbnail (MetaDisplay *display,
+                                    int          monitor,
+                                    int          max_width,
+                                    int          max_height,
+                                    int         *width,
+                                    int         *height,
+                                    int         *stride)
+{
+  MetaBackend *backend = meta_get_backend ();
+  MetaMonitorManager *monitor_manager =
+    meta_backend_get_monitor_manager (backend);
+  MetaLogicalMonitor *logical_monitor;
+  g_autoptr (GError) error = NULL;
+  cairo_rectangle_int_t rect;
+  float scale;
+  uint8_t *data;
+  int w, h;
+
+  g_return_val_if_fail (META_IS_DISPLAY (display), NULL);
+
+  if (monitor < 0 ||
+      monitor >= meta_monitor_manager_get_num_logical_monitors (monitor_manager) ||
+      max_width < 1 || max_height < 1)
+    return NULL;
+
+  logical_monitor =
+    meta_monitor_manager_get_logical_monitor_from_number (monitor_manager,
+                                                          monitor);
+  rect = (cairo_rectangle_int_t) {
+    .x = logical_monitor->rect.x,
+    .y = logical_monitor->rect.y,
+    .width = logical_monitor->rect.width,
+    .height = logical_monitor->rect.height,
+  };
+
+  scale = MIN (1.0f, MIN ((float) max_width / rect.width,
+                          (float) max_height / rect.height));
+  w = MAX (1, (int) roundf (rect.width * scale));
+  h = MAX (1, (int) roundf (rect.height * scale));
+
+  data = g_malloc (w * h * 4);
+  if (!clutter_stage_paint_to_buffer (CLUTTER_STAGE (meta_backend_get_stage (backend)),
+                                      &rect, scale, data, w * 4,
+                                      CLUTTER_CAIRO_FORMAT_ARGB32,
+                                      CLUTTER_PAINT_FLAG_NO_CURSORS,
+                                      &error))
+    {
+      g_warning ("Failed to paint monitor thumbnail: %s", error->message);
+      g_free (data);
+      return NULL;
+    }
+
+  *width = w;
+  *height = h;
+  *stride = w * 4;
+  return g_bytes_new_take (data, w * h * 4);
 }
 
 /**
