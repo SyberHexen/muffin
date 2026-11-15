@@ -3586,12 +3586,17 @@ meta_renderer_native_create_offscreen (MetaRendererNative    *renderer,
                                        CoglContext           *context,
                                        gint                   view_width,
                                        gint                   view_height,
+                                       CoglPixelFormat        format,
                                        GError               **error)
 {
   CoglOffscreen *fb;
   CoglTexture2D *tex;
 
-  tex = cogl_texture_2d_new_with_size (context, view_width, view_height);
+  if (format == COGL_PIXEL_FORMAT_ANY)
+    tex = cogl_texture_2d_new_with_size (context, view_width, view_height);
+  else
+    tex = cogl_texture_2d_new_with_format (context, view_width, view_height,
+                                           format);
   cogl_primitive_texture_set_auto_mipmap (COGL_PRIMITIVE_TEXTURE (tex), FALSE);
 
   if (!cogl_texture_allocate (COGL_TEXTURE (tex), error))
@@ -3794,10 +3799,18 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                                              logical_monitor,
                                              output,
                                              crtc);
-  if (view_transform != META_MONITOR_TRANSFORM_NORMAL)
+  /* An output in the BT.2100 color mode is composited in its SDR encoding, in
+   * half floats so HDR content can go past SDR white, and converted to PQ
+   * when the view is blitted to the output (see meta-color-transform.c). */
+  if (view_transform != META_MONITOR_TRANSFORM_NORMAL ||
+      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
     {
+      CoglPixelFormat offscreen_format = COGL_PIXEL_FORMAT_ANY;
       int offscreen_width;
       int offscreen_height;
+
+      if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+        offscreen_format = COGL_PIXEL_FORMAT_RGBA_FP_16161616_PRE;
 
       if (meta_monitor_transform_is_rotated (view_transform))
         {
@@ -3814,7 +3827,21 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                                                          cogl_context,
                                                          offscreen_width,
                                                          offscreen_height,
+                                                         offscreen_format,
                                                          &error);
+      /* Without half floats, HDR content is clipped at SDR white instead */
+      if (!offscreen && offscreen_format != COGL_PIXEL_FORMAT_ANY)
+        {
+          g_warning ("Could not allocate a half float view for HDR, "
+                     "HDR content will be clipped: %s", error->message);
+          g_clear_error (&error);
+          offscreen = meta_renderer_native_create_offscreen (renderer_native,
+                                                             cogl_context,
+                                                             offscreen_width,
+                                                             offscreen_height,
+                                                             COGL_PIXEL_FORMAT_ANY,
+                                                             &error);
+        }
       if (!offscreen)
         g_error ("Failed to allocate back buffer texture: %s", error->message);
     }
@@ -3838,6 +3865,7 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                        "offscreen", offscreen,
                        "use-shadowfb", use_shadowfb,
                        "transform", view_transform,
+                       "color-mode", output->color_mode,
                        NULL);
   g_clear_pointer (&offscreen, cogl_object_unref);
 

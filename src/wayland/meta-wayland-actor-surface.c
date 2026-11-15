@@ -24,11 +24,13 @@
 #include "wayland/meta-wayland-actor-surface.h"
 
 #include "backends/meta-backend-private.h"
+#include "backends/meta-color-transform.h"
 #include "backends/meta-logical-monitor.h"
 #include "compositor/meta-surface-actor-wayland.h"
 #include "compositor/meta-window-actor-wayland.h"
 #include "compositor/region-utils.h"
 #include "wayland/meta-wayland-buffer.h"
+#include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-wayland-surface.h"
 #include "wayland/meta-window-wayland.h"
 #include "wayland/meta-xwayland-surface.h"
@@ -186,6 +188,12 @@ meta_wayland_actor_surface_real_sync_actor_state (MetaWaylandActorSurface *actor
 
       meta_shaped_texture_set_texture (stex, surface->texture);
       meta_shaped_texture_set_snippet (stex, snippet);
+      /* HDR10 content is converted to the colors windows are composited
+       * in; everything else is taken as sRGB, as it always was */
+      meta_shaped_texture_set_color_snippet (
+        stex,
+        meta_wayland_color_description_is_hdr10 (surface->color_management.description) ?
+        meta_color_transform_get_pq_to_composite_snippet () : NULL);
       meta_shaped_texture_set_is_y_inverted (stex, is_y_inverted);
       meta_shaped_texture_set_buffer_scale (stex, surface->scale);
       cogl_clear_object (&snippet);
