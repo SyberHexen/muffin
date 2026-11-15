@@ -26,10 +26,12 @@
 #include "backends/meta-crtc.h"
 #include "backends/meta-cursor-renderer.h"
 #include "backends/meta-logical-monitor.h"
+#include "backends/meta-renderer-view.h"
 #include "backends/native/meta-renderer-native.h"
 #include "compositor/meta-surface-actor-wayland.h"
 #include "meta/prefs.h"
 #include "meta/util.h"
+#include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-wayland-surface.h"
 #include "wayland/meta-wayland-tearing-control.h"
 
@@ -253,6 +255,16 @@ maybe_assign_primary_plane (MetaCompositor *compositor)
            * nothing. */
           reason = "surface not scanout-capable";
           if (!crtc->config || !crtc->config->mode)
+            goto reconcile;
+
+          /* Only HDR10 content can go straight to an output in the BT.2100
+           * color mode, and only SDR content to the others: the rest has to
+           * be composited to be converted. */
+          reason = "content not in the output's color mode";
+          if (META_IS_RENDERER_VIEW (stage_view) &&
+              (meta_renderer_view_get_color_mode (META_RENDERER_VIEW (stage_view)) ==
+               META_OUTPUT_COLOR_MODE_BT2100) !=
+              meta_wayland_color_description_is_hdr10 (surface->color_management.description))
             goto reconcile;
 
           if (!meta_wayland_surface_can_scanout_untransformed (surface,
