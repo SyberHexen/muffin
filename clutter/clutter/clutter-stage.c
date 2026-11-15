@@ -213,6 +213,7 @@ static void capture_view_into (ClutterStage          *stage,
                                gboolean               paint,
                                ClutterStageView      *view,
                                cairo_rectangle_int_t *rect,
+                               float                  scale,
                                uint8_t               *data,
                                int                    stride);
 static void clutter_stage_update_view_perspective (ClutterStage *stage);
@@ -4541,7 +4542,7 @@ capture_view (ClutterStage          *stage,
   data = cairo_image_surface_get_data (image);
   stride = cairo_image_surface_get_stride (image);
 
-  capture_view_into (stage, paint, view, rect, data, stride);
+  capture_view_into (stage, paint, view, rect, view_scale, data, stride);
   capture->image = image;
 
   cairo_surface_mark_dirty (capture->image);
@@ -4768,26 +4769,35 @@ capture_view_into (ClutterStage          *stage,
                    gboolean               paint,
                    ClutterStageView      *view,
                    cairo_rectangle_int_t *rect,
+                   float                  scale,
                    uint8_t               *data,
                    int                    stride)
 {
   g_autoptr (GError) error = NULL;
-  float view_scale;
 
   g_return_if_fail (CLUTTER_IS_STAGE (stage));
 
-  view_scale = clutter_stage_view_get_scale (view);
-  if (!clutter_stage_paint_to_buffer (stage, rect, view_scale, data, stride,
+  if (!clutter_stage_paint_to_buffer (stage, rect, scale, data, stride,
                                       CLUTTER_CAIRO_FORMAT_ARGB32,
                                       CLUTTER_PAINT_FLAG_NO_CURSORS,
                                       &error))
     g_warning ("Failed to capture stage: %s", error->message);
 }
 
+/**
+ * clutter_stage_capture_into: (skip)
+ * @rect: the area to capture, in stage coordinates
+ * @scale: the scale of @data: it is @rect scaled by it, tightly packed
+ *
+ * The stride and offsets were computed in stage coordinates while the views
+ * painted at their own scale, so captures of a scaled monitor (1.5: 1920
+ * pixel rows written 1280 pixels apart) came out overlapped.
+ */
 void
 clutter_stage_capture_into (ClutterStage          *stage,
                             gboolean               paint,
                             cairo_rectangle_int_t *rect,
+                            float                  scale,
                             uint8_t               *data)
 {
   ClutterStagePrivate *priv = stage->priv;
@@ -4795,7 +4805,7 @@ clutter_stage_capture_into (ClutterStage          *stage,
   int bpp = 4;
   int stride;
 
-  stride = rect->width * 4;
+  stride = (int) roundf (rect->width * scale) * bpp;
 
   for (l = _clutter_stage_window_get_views (priv->impl); l; l = l->next)
     {
@@ -4812,11 +4822,11 @@ clutter_stage_capture_into (ClutterStage          *stage,
       cairo_region_get_extents (region, &capture_rect);
       cairo_region_destroy (region);
 
-      x_offset = capture_rect.x - rect->x;
-      y_offset = capture_rect.y - rect->y;
+      x_offset = (int) roundf ((capture_rect.x - rect->x) * scale);
+      y_offset = (int) roundf ((capture_rect.y - rect->y) * scale);
 
       capture_view_into (stage, paint, view,
-                         &capture_rect,
+                         &capture_rect, scale,
                          data + (x_offset * bpp) + (y_offset * stride),
                          stride);
     }
