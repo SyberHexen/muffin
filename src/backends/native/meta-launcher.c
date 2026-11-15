@@ -298,6 +298,67 @@ take_device (Login1Session *session_proxy,
   return TRUE;
 }
 
+#define DRM_MAJOR 226
+
+/* How long to wait for a graphics card the previous session still holds */
+#define DRM_BUSY_TIMEOUT_US (5 * G_USEC_PER_SEC)
+#define DRM_BUSY_INTERVAL_US (100 * 1000)
+
+static gboolean
+is_busy_error (GError *error)
+{
+  g_autofree char *remote_error = NULL;
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_BUSY))
+    return TRUE;
+
+  remote_error = g_dbus_error_get_remote_error (error);
+  return g_strcmp0 (remote_error, "System.Error.EBUSY") == 0;
+}
+
+/* logind fails to take a graphics card with EBUSY while another display
+ * server is still its DRM master: at login, the display manager's greeter
+ * can still be shutting down when the session starts.  Opening the card
+ * anyway would leave its monitors off for the whole session, so wait a
+ * little for the greeter to let go. */
+static gboolean
+take_device_retrying (Login1Session *session_proxy,
+                      int            dev_major,
+                      int            dev_minor,
+                      int           *out_fd,
+                      GError       **error)
+{
+  gint64 deadline = g_get_monotonic_time () + DRM_BUSY_TIMEOUT_US;
+  gboolean waited = FALSE;
+
+  while (TRUE)
+    {
+      g_autoptr (GError) local_error = NULL;
+
+      if (take_device (session_proxy, dev_major, dev_minor, out_fd, NULL,
+                       &local_error))
+        {
+          if (waited)
+            g_message ("Graphics device (%d,%d) became available",
+                       dev_major, dev_minor);
+          return TRUE;
+        }
+
+      if (dev_major != DRM_MAJOR || !is_busy_error (local_error) ||
+          g_get_monotonic_time () >= deadline)
+        {
+          g_propagate_error (error, g_steal_pointer (&local_error));
+          return FALSE;
+        }
+
+      if (!waited)
+        g_message ("Graphics device (%d,%d) is busy, waiting for it",
+                   dev_major, dev_minor);
+      waited = TRUE;
+      g_usleep (DRM_BUSY_INTERVAL_US);
+    }
+}
+
 static gboolean
 get_device_info_from_path (const char *path,
                            int        *out_major,
@@ -349,7 +410,8 @@ meta_launcher_open_restricted (MetaLauncher *launcher,
       return -1;
     }
 
-  if (!take_device (launcher->session_proxy, major, minor, &fd, NULL, error))
+  if (!take_device_retrying (launcher->session_proxy, major, minor, &fd,
+                             error))
     return -1;
 
   return fd;
