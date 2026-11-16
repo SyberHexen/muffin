@@ -175,6 +175,9 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
       float peak = meta_output_get_hdr_peak_luminance (output);
       gboolean from_edid = !output->hdr_peak_luminance;
 
+      meta_kms_connector_set_hdr_primaries (output_kms->kms_connector,
+                                            output->has_edid_primaries ?
+                                            output->edid_primaries : NULL);
       meta_kms_connector_set_hdr_luminance (output_kms->kms_connector,
                                             peak,
                                             from_edid ? output->edid_max_frame_avg : 0,
