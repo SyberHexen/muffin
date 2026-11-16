@@ -86,4 +86,10 @@ void meta_color_transform_set_lut (CoglPipeline         *pipeline,
                                    const unsigned short *green,
                                    const unsigned short *blue);
 
+void meta_color_transform_encode_sdr_pixels_pq (uint8_t *pixels,
+                                                int      width,
+                                                int      height,
+                                                int      rowstride,
+                                                float    sdr_white);
+
 #endif /* META_COLOR_TRANSFORM_H */
