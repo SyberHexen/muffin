@@ -96,6 +96,7 @@
 
 #ifdef HAVE_NATIVE_BACKEND
 #include "backends/native/meta-backend-native.h"
+#include "backends/native/meta-kms.h"
 #endif
 
 /*
@@ -667,6 +668,14 @@ meta_run (void)
   g_main_loop_run (meta_main_loop);
 
   meta_finalize ();
+
+#ifdef HAVE_NATIVE_BACKEND
+  /* Leave the last frames up for the next display server; nothing is
+   * drawn any more */
+  if (META_IS_BACKEND_NATIVE (meta_get_backend ()))
+    meta_kms_prepare_shutdown (
+      meta_backend_native_get_kms (META_BACKEND_NATIVE (meta_get_backend ())));
+#endif
 
   return meta_exit_code;
 }
