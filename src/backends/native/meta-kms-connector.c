@@ -19,6 +19,8 @@
 
 #include "config.h"
 
+#include <string.h>
+
 #include "backends/native/meta-kms-connector.h"
 #include "backends/native/meta-kms-connector-private.h"
 
@@ -66,6 +68,8 @@ struct _MetaKmsConnector
    * and the values the current blob was made with */
   float hdr_max_luminance, hdr_max_frame_avg, hdr_min_luminance;
   float blob_max_luminance, blob_max_frame_avg, blob_min_luminance;
+  /* Red, green, blue and white x, y in 0.00002 units; all 0 for BT.2020 */
+  uint16_t hdr_primaries[8], blob_primaries[8];
 
   uint32_t color_format_prop_id;
   uint64_t color_format_values[META_OUTPUT_COLOR_FORMAT_LAST + 1];
@@ -271,6 +275,27 @@ meta_kms_connector_set_hdr_luminance (MetaKmsConnector *connector,
   connector->hdr_min_luminance = min_luminance;
 }
 
+/**
+ * meta_kms_connector_set_hdr_primaries:
+ * @primaries: (nullable): x, y of the display's red, green, blue and white
+ *   (from its EDID), or %NULL for BT.2020
+ *
+ * The mastering display primaries of the HDR10 static metadata: the
+ * display's own, as other compositors (KWin) send them, so the display
+ * gets the same metadata from them and need not re-sync when they hand
+ * over to each other.
+ */
+void
+meta_kms_connector_set_hdr_primaries (MetaKmsConnector *connector,
+                                      const double     *primaries)
+{
+  int i;
+
+  for (i = 0; i < 8; i++)
+    connector->hdr_primaries[i] =
+      primaries ? (uint16_t) CLAMP (round (primaries[i] / 0.00002), 0, 50000) : 0;
+}
+
 /* HDR10 static metadata.  For a display of known peak luminance, describe
  * the content as mastered on it; otherwise as mastered on a 1000 nit
  * BT.2020 display, the most common HDR10 grading target. */
@@ -288,7 +313,9 @@ ensure_hdr_metadata_blob (MetaKmsConnector *connector,
   if (connector->hdr_metadata_blob_id &&
       connector->blob_max_luminance == max &&
       connector->blob_max_frame_avg == avg &&
-      connector->blob_min_luminance == min)
+      connector->blob_min_luminance == min &&
+      memcmp (connector->blob_primaries, connector->hdr_primaries,
+              sizeof (connector->hdr_primaries)) == 0)
     return connector->hdr_metadata_blob_id;
 
   /* A blob still set on the connector stays valid until replaced */
@@ -301,15 +328,31 @@ ensure_hdr_metadata_blob (MetaKmsConnector *connector,
   metadata.metadata_type = 0;           /* HDMI_STATIC_METADATA_TYPE1 */
   info->eotf = 2;                       /* HDMI_EOTF_SMPTE_ST2084 */
   info->metadata_type = 0;
-  /* chromaticities in units of 0.00002: BT.2020 red, green, blue, D65 */
-  info->display_primaries[0].x = 35400;
-  info->display_primaries[0].y = 14600;
-  info->display_primaries[1].x = 8500;
-  info->display_primaries[1].y = 39850;
-  info->display_primaries[2].x = 6550;
-  info->display_primaries[2].y = 2300;
-  info->white_point.x = 15635;
-  info->white_point.y = 16450;
+  if (connector->hdr_primaries[0])
+    {
+      /* the display's own (see meta_kms_connector_set_hdr_primaries()) */
+      int i;
+
+      for (i = 0; i < 3; i++)
+        {
+          info->display_primaries[i].x = connector->hdr_primaries[2 * i];
+          info->display_primaries[i].y = connector->hdr_primaries[2 * i + 1];
+        }
+      info->white_point.x = connector->hdr_primaries[6];
+      info->white_point.y = connector->hdr_primaries[7];
+    }
+  else
+    {
+      /* chromaticities in units of 0.00002: BT.2020 red, green, blue, D65 */
+      info->display_primaries[0].x = 35400;
+      info->display_primaries[0].y = 14600;
+      info->display_primaries[1].x = 8500;
+      info->display_primaries[1].y = 39850;
+      info->display_primaries[2].x = 6550;
+      info->display_primaries[2].y = 2300;
+      info->white_point.x = 15635;
+      info->white_point.y = 16450;
+    }
   if (max > 0)
     {
       info->max_display_mastering_luminance = (uint16_t) MIN (roundf (max), 65535);
@@ -330,6 +373,8 @@ ensure_hdr_metadata_blob (MetaKmsConnector *connector,
   connector->blob_max_luminance = max;
   connector->blob_max_frame_avg = avg;
   connector->blob_min_luminance = min;
+  memcpy (connector->blob_primaries, connector->hdr_primaries,
+          sizeof (connector->hdr_primaries));
   ret = drmModeCreatePropertyBlob (fd, &metadata, sizeof (metadata),
                                    &connector->hdr_metadata_blob_id);
   if (ret != 0)
