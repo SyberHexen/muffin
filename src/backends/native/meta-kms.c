@@ -30,6 +30,14 @@
 #include "backends/native/meta-udev.h"
 #include "cogl/cogl.h"
 
+#include <errno.h>
+#include <stdlib.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+
+#include "backends/native/meta-kms-crtc.h"
+#include "backends/native/meta-kms-impl-device.h"
+
 /**
  * SECTION:kms
  * @short description: KMS abstraction
@@ -167,6 +175,8 @@ struct _MetaKms
   gboolean waiting_for_impl_task;
 
   GList *devices;
+
+  gboolean last_frames_kept;
 
   MetaKmsUpdate *pending_update;
 
@@ -344,6 +354,89 @@ meta_kms_run_impl_task_sync (MetaKms              *kms,
   kms->in_impl_task = FALSE;
 
   return ret;
+}
+
+static gpointer
+keep_last_frames_in_impl (MetaKmsImpl  *impl,
+                          gpointer      user_data,
+                          GError      **error)
+{
+  MetaKms *kms = user_data;
+  GList *l;
+
+  for (l = kms->devices; l; l = l->next)
+    {
+      MetaKmsDevice *device = l->data;
+      int fd = meta_kms_impl_device_get_fd (meta_kms_device_get_impl_device (device));
+      GList *k;
+
+      if (fd < 0)
+        continue;
+
+      for (k = meta_kms_device_get_crtcs (device); k; k = k->next)
+        {
+          MetaKmsCrtc *crtc = k->data;
+          drmModeCrtc *drm_crtc;
+          int ret;
+
+          drm_crtc = drmModeGetCrtc (fd, meta_kms_crtc_get_id (crtc));
+          if (!drm_crtc)
+            continue;
+
+          if (drm_crtc->buffer_id)
+            {
+              ret = drmModeCloseFB (fd, drm_crtc->buffer_id);
+              if (ret == 0)
+                {
+                  g_message ("Leaving the last frame of CRTC %u on %s up",
+                             drm_crtc->crtc_id, meta_kms_device_get_path (device));
+                }
+              else if (ret != -EINVAL && ret != -ENOTTY && ret != -ENOENT)
+                {
+                  g_warning ("Could not leave the last frame of CRTC %u up: %s",
+                             drm_crtc->crtc_id, g_strerror (-ret));
+                }
+            }
+
+          drmModeFreeCrtc (drm_crtc);
+        }
+    }
+
+  return GINT_TO_POINTER (TRUE);
+}
+
+/**
+ * meta_kms_prepare_shutdown:
+ *
+ * Leaves what the displays show up when Muffin exits.  Closing the devices
+ * would otherwise remove the framebuffers being scanned out, which turns
+ * those displays off until the next display server (the display manager's
+ * login window, or the next session) lights them again: a TV then loses
+ * the signal and re-syncs.  With the framebuffers closed (Linux 6.8 and
+ * later), the kernel keeps showing them until the next display server
+ * replaces them, as display servers hand over to each other.
+ *
+ * Nothing may be drawn after this.
+ */
+void
+meta_kms_prepare_shutdown (MetaKms *kms)
+{
+  if (kms->last_frames_kept)
+    return;
+
+  kms->last_frames_kept = TRUE;
+  meta_kms_run_impl_task_sync (kms, keep_last_frames_in_impl, kms, NULL);
+}
+
+/* However Muffin exits: it also exits right away (exit ()) when it loses
+ * Xwayland, which at logout is stopped with the rest of the session */
+static MetaKms *exiting_kms;
+
+static void
+keep_last_frames_at_exit (void)
+{
+  if (exiting_kms)
+    meta_kms_prepare_shutdown (exiting_kms);
 }
 
 static gboolean
@@ -589,6 +682,12 @@ meta_kms_new (MetaBackend  *backend,
     g_signal_connect (udev, "device-removed",
                       G_CALLBACK (on_udev_device_removed), kms);
 
+  if (!exiting_kms)
+    {
+      exiting_kms = kms;
+      atexit (keep_last_frames_at_exit);
+    }
+
   return kms;
 }
 
@@ -599,6 +698,9 @@ meta_kms_finalize (GObject *object)
   MetaBackendNative *backend_native = META_BACKEND_NATIVE (kms->backend);
   MetaUdev *udev = meta_backend_native_get_udev (backend_native);
   GList *l;
+
+  if (exiting_kms == kms)
+    exiting_kms = NULL;
 
   for (l = kms->pending_callbacks; l; l = l->next)
     meta_kms_callback_data_free (l->data);
