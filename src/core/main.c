@@ -554,6 +554,10 @@ meta_init (void)
 #endif
 
   g_unix_signal_add (SIGTERM, on_sigterm, NULL);
+  /* The end of a login session sends SIGHUP with its SIGTERM (systemd's
+   * SendSIGHUP for session scopes): quit as cleanly as for SIGTERM instead
+   * of being killed by it */
+  g_unix_signal_add (SIGHUP, on_sigterm, NULL);
 
   if (g_getenv ("MUFFIN_VERBOSE"))
     meta_set_verbose (TRUE);
