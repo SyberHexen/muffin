@@ -37,6 +37,7 @@
 
 #include "backends/meta-color-transform.h"
 
+#include <math.h>
 #include <stdlib.h>
 
 #define DEFAULT_SDR_WHITE_NITS 203.0f  /* ITU-R BT.2408 reference white */
@@ -245,6 +246,87 @@ get_sdr_transfer (void)
     }
 
   return transfer;
+}
+
+/* The CPU side of the SDR decode in the snippets (see get_sdr_transfer) */
+static float
+sdr_to_linear (float e)
+{
+  if (g_strcmp0 (get_sdr_transfer (), "srgb") == 0)
+    return e <= 0.04045f ? e / 12.92f : powf ((e + 0.055f) / 1.055f, 2.4f);
+
+  return powf (e, 2.2f);
+}
+
+static float
+linear_to_pq (float l)
+{
+  const float m1 = 0.1593017578125f, m2 = 78.84375f;
+  const float c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
+  float y = powf (CLAMP (l, 0.0f, 1.0f), m1);
+
+  return powf ((c1 + c2 * y) / (1.0f + c3 * y), m2);
+}
+
+/**
+ * meta_color_transform_encode_sdr_pixels_pq: (skip)
+ * @pixels: premultiplied ARGB8888 (B, G, R, A in memory) SDR pixels
+ * @sdr_white: the luminance SDR white is shown at, in cd/m²
+ *
+ * Converts the pixels, in place, to what an output in the BT.2100 color
+ * mode takes: BT.2020 primaries, PQ, SDR white at @sdr_white, the same
+ * conversion the composited views get.  For images that skip compositing,
+ * as a hardware cursor.  Coverage stays premultiplied, now in PQ.
+ */
+void
+meta_color_transform_encode_sdr_pixels_pq (uint8_t *pixels,
+                                           int      width,
+                                           int      height,
+                                           int      rowstride,
+                                           float    sdr_white)
+{
+  /* BT.709 to BT.2020, linear (ITU-R BT.2087) */
+  static const float m[3][3] = {
+    { 0.6274f, 0.3293f, 0.0433f },
+    { 0.0691f, 0.9195f, 0.0114f },
+    { 0.0164f, 0.0880f, 0.8956f },
+  };
+  float scale = sdr_white / 10000.0f;
+  float decode[256];
+  int x, y, i;
+
+  for (i = 0; i < 256; i++)
+    decode[i] = sdr_to_linear (i / 255.0f);
+
+  for (y = 0; y < height; y++)
+    {
+      uint8_t *p = pixels + y * rowstride;
+
+      for (x = 0; x < width; x++, p += 4)
+        {
+          float a = p[3] / 255.0f;
+          float rgb[3], lin[3];
+          int c;
+
+          if (p[3] == 0)
+            continue;
+
+          /* Unpremultiplied R, G, B */
+          for (c = 0; c < 3; c++)
+            {
+              int v = (int) roundf (p[2 - c] / a);
+
+              lin[c] = decode[CLAMP (v, 0, 255)];
+            }
+
+          for (c = 0; c < 3; c++)
+            rgb[c] = linear_to_pq ((m[c][0] * lin[0] + m[c][1] * lin[1] +
+                                    m[c][2] * lin[2]) * scale);
+
+          for (c = 0; c < 3; c++)
+            p[2 - c] = (uint8_t) CLAMP (roundf (rgb[c] * a * 255.0f), 0, 255);
+        }
+    }
 }
 
 /* Run @body on the un-premultiplied color in "c" */
