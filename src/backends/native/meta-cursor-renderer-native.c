@@ -35,6 +35,7 @@
 #include "backends/meta-backend-private.h"
 #include "backends/meta-cursor-sprite-xcursor.h"
 #include "backends/meta-logical-monitor.h"
+#include "backends/meta-color-transform.h"
 #include "backends/meta-monitor.h"
 #include "backends/meta-monitor-manager-private.h"
 #include "backends/meta-output.h"
@@ -121,6 +122,9 @@ typedef struct _MetaCursorNativeGpuState
   struct gbm_bo *bos[HW_CURSOR_BUFFER_COUNT];
   int widths[HW_CURSOR_BUFFER_COUNT];
   int heights[HW_CURSOR_BUFFER_COUNT];
+  /* The SDR white each buffer was converted to PQ for (an HDR output), 0
+   * for an SDR buffer, -1 for one that cannot be converted */
+  float pq_sdr_whites[HW_CURSOR_BUFFER_COUNT];
 } MetaCursorNativeGpuState;
 
 typedef struct _MetaCursorNativePrivate
@@ -235,7 +239,8 @@ set_pending_cursor_sprite_gbm_bo (MetaCursorSprite *cursor_sprite,
                                   MetaGpuKms       *gpu_kms,
                                   struct gbm_bo    *bo,
                                   int               width,
-                                  int               height)
+                                  int               height,
+                                  float             pq_sdr_white)
 {
   MetaCursorNativePrivate *cursor_priv;
   MetaCursorNativeGpuState *cursor_gpu_state;
@@ -248,7 +253,49 @@ set_pending_cursor_sprite_gbm_bo (MetaCursorSprite *cursor_sprite,
   cursor_gpu_state->bos[pending_bo] = bo;
   cursor_gpu_state->widths[pending_bo] = width;
   cursor_gpu_state->heights[pending_bo] = height;
+  cursor_gpu_state->pq_sdr_whites[pending_bo] = pq_sdr_white;
   cursor_gpu_state->pending_bo_state = META_CURSOR_GBM_BO_STATE_SET;
+}
+
+/* The buffer the cursor plane shows or is about to */
+static guint
+get_current_cursor_sprite_gbm_bo_index (MetaCursorNativeGpuState *cursor_gpu_state)
+{
+  if (cursor_gpu_state->pending_bo_state == META_CURSOR_GBM_BO_STATE_SET)
+    return get_pending_cursor_sprite_gbm_bo_index (cursor_gpu_state);
+
+  return cursor_gpu_state->active_bo;
+}
+
+/* The SDR white to convert the GPU's cursor buffers to PQ for: the one of
+ * its outputs in the BT.2100 color mode, if all of its lit outputs are, as
+ * they share the buffer; else 0 (no conversion, the compositor draws the
+ * cursor over BT.2100 outputs) */
+static float
+get_gpu_cursor_pq_sdr_white (MetaGpuKms *gpu_kms)
+{
+  float sdr_white = 0;
+  GList *l;
+
+  for (l = meta_gpu_get_outputs (META_GPU (gpu_kms)); l; l = l->next)
+    {
+      MetaOutput *output = l->data;
+
+      if (!meta_output_get_assigned_crtc (output))
+        continue;
+
+      if (output->color_mode != META_OUTPUT_COLOR_MODE_BT2100)
+        return 0;
+
+      if (sdr_white > 0 &&
+          !G_APPROX_VALUE (sdr_white, meta_output_get_sdr_white_level (output),
+                           0.5f))
+        return 0;
+
+      sdr_white = meta_output_get_sdr_white_level (output);
+    }
+
+  return sdr_white;
 }
 
 static void
@@ -919,12 +966,14 @@ gpus_have_hw_cursor_sprite (MetaCursorSprite *cursor_sprite,
   return TRUE;
 }
 
-/* Whether the cursor is over an output in the BT.2100 color mode, where an
- * SDR cursor image on the cursor plane would be shown unconverted */
+/* Whether the cursor is over an output in the BT.2100 color mode that its
+ * cursor buffer was not converted for (see get_gpu_cursor_pq_sdr_white()):
+ * an SDR image on the cursor plane would be shown unconverted there */
 static gboolean
-cursor_over_bt2100_output (MetaCursorRenderer *renderer,
-                           MetaCursorSprite   *cursor_sprite)
+cursor_over_unconverted_bt2100_output (MetaCursorRenderer *renderer,
+                                       MetaCursorSprite   *cursor_sprite)
 {
+  MetaCursorNativePrivate *cursor_priv = get_cursor_priv (cursor_sprite);
   MetaCursorRendererNative *cursor_renderer_native =
     META_CURSOR_RENDERER_NATIVE (renderer);
   MetaCursorRendererNativePrivate *priv =
@@ -955,8 +1004,23 @@ cursor_over_bt2100_output (MetaCursorRenderer *renderer,
            l_mon = l_mon->next)
         {
           MetaOutput *output = meta_monitor_get_main_output (l_mon->data);
+          MetaCursorNativeGpuState *cursor_gpu_state;
+          float pq_sdr_white;
 
-          if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+          if (output->color_mode != META_OUTPUT_COLOR_MODE_BT2100)
+            continue;
+
+          cursor_gpu_state = cursor_priv ?
+            get_cursor_gpu_state (cursor_priv,
+                                  META_GPU_KMS (meta_output_get_gpu (output))) :
+            NULL;
+          if (!cursor_gpu_state)
+            return TRUE;
+
+          pq_sdr_white = cursor_gpu_state->pq_sdr_whites[
+            get_current_cursor_sprite_gbm_bo_index (cursor_gpu_state)];
+          if (!G_APPROX_VALUE (pq_sdr_white,
+                               meta_output_get_sdr_white_level (output), 0.5f))
             return TRUE;
         }
     }
@@ -987,7 +1051,7 @@ should_have_hw_cursor (MetaCursorRenderer *renderer,
     return FALSE;
 
   /* Drawn by the compositor instead, which converts it */
-  if (cursor_over_bt2100_output (renderer, cursor_sprite))
+  if (cursor_over_unconverted_bt2100_output (renderer, cursor_sprite))
     return FALSE;
 
   texture = meta_cursor_sprite_get_cogl_texture (cursor_sprite);
@@ -1404,6 +1468,7 @@ load_cursor_sprite_gbm_buffer_for_gpu (MetaCursorRendererNative *native,
     {
       struct gbm_bo *bo;
       uint8_t buf[4 * bo_width * bo_height];
+      float pq_sdr_white;
       uint i;
 
       bo = gbm_bo_create (gbm_device, bo_width, bo_height,
@@ -1417,6 +1482,15 @@ load_cursor_sprite_gbm_buffer_for_gpu (MetaCursorRendererNative *native,
       memset (buf, 0, sizeof(buf));
       for (i = 0; i < height; i++)
         memcpy (buf + i * 4 * bo_width, pixels + i * rowstride, width * 4);
+
+      /* For a GPU whose outputs are in the BT.2100 color mode, in the
+       * encoding they take, as the composited views are converted */
+      pq_sdr_white = gbm_format == GBM_FORMAT_ARGB8888 ?
+        get_gpu_cursor_pq_sdr_white (gpu_kms) : 0;
+      if (pq_sdr_white > 0)
+        meta_color_transform_encode_sdr_pixels_pq (buf, width, height,
+                                                   4 * bo_width, pq_sdr_white);
+
       if (gbm_bo_write (bo, buf, bo_width * bo_height * 4) != 0)
         {
           meta_warning ("Failed to write cursors buffer data: %s",
@@ -1426,7 +1500,7 @@ load_cursor_sprite_gbm_buffer_for_gpu (MetaCursorRendererNative *native,
         }
 
       set_pending_cursor_sprite_gbm_bo (cursor_sprite, gpu_kms, bo,
-                                        bo_width, bo_height);
+                                        bo_width, bo_height, pq_sdr_white);
     }
   else
     {
@@ -1453,6 +1527,24 @@ is_cursor_hw_state_valid (MetaCursorSprite *cursor_sprite,
     {
     case META_CURSOR_GBM_BO_STATE_SET:
     case META_CURSOR_GBM_BO_STATE_NONE:
+      /* Converted for other outputs (an output switched between SDR and
+       * HDR, or its SDR white changed): load it again */
+      if (cursor_gpu_state->pq_sdr_whites[
+            get_current_cursor_sprite_gbm_bo_index (cursor_gpu_state)] >= 0 &&
+          !G_APPROX_VALUE (cursor_gpu_state->pq_sdr_whites[
+                             get_current_cursor_sprite_gbm_bo_index (cursor_gpu_state)],
+                           get_gpu_cursor_pq_sdr_white (gpu_kms), 0.5f))
+        {
+          guint pending_bo =
+            get_pending_cursor_sprite_gbm_bo_index (cursor_gpu_state);
+
+          g_clear_pointer (&cursor_gpu_state->bos[pending_bo], gbm_bo_destroy);
+          cursor_gpu_state->widths[pending_bo] = 0;
+          cursor_gpu_state->heights[pending_bo] = 0;
+          cursor_gpu_state->pending_bo_state =
+            META_CURSOR_GBM_BO_STATE_INVALIDATED;
+          return FALSE;
+        }
       return TRUE;
     case META_CURSOR_GBM_BO_STATE_INVALIDATED:
       return FALSE;
@@ -1737,8 +1829,10 @@ realize_cursor_sprite_from_wl_buffer_for_gpu (MetaCursorRenderer      *renderer,
 
       unset_can_preprocess (cursor_sprite);
 
+      /* Not converted (the pixels are in GPU memory): over BT.2100 outputs
+       * the compositor draws this cursor */
       set_pending_cursor_sprite_gbm_bo (cursor_sprite, gpu_kms, bo,
-                                        width, height);
+                                        width, height, -1);
     }
 }
 #endif
