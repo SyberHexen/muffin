@@ -1509,6 +1509,11 @@ evdev_add_device (MetaSeatNative         *seat,
       _clutter_input_device_add_slave (master, device);
     }
 
+  /* A keyboard added after the lock state was set (as Num Lock is restored
+   * at startup, before the keyboards are added) shows it too */
+  if (type == CLUTTER_KEYBOARD_DEVICE)
+    meta_seat_native_sync_leds (seat);
+
   return device;
 }
 
