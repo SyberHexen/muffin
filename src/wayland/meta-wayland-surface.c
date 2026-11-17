@@ -49,6 +49,7 @@
 #include "wayland/meta-wayland-keyboard.h"
 #include "wayland/meta-wayland-outputs.h"
 #include "wayland/meta-wayland-pointer.h"
+#include "wayland/meta-wayland-commit-timing.h"
 #include "wayland/meta-wayland-fifo.h"
 #include "wayland/meta-wayland-presentation-time.h"
 #include "wayland/meta-wayland-private.h"
@@ -490,6 +491,9 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   state->fifo_set_barrier = FALSE;
   state->fifo_wait_barrier = FALSE;
 
+  state->has_target_time = FALSE;
+  state->target_time_us = 0;
+
   state->has_new_geometry = FALSE;
   state->has_acked_configure_serial = FALSE;
   state->has_new_min_size = FALSE;
@@ -561,6 +565,12 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
 
   to->fifo_set_barrier |= from->fifo_set_barrier;
   to->fifo_wait_barrier |= from->fifo_wait_barrier;
+
+  if (from->has_target_time)
+    {
+      to->has_target_time = TRUE;
+      to->target_time_us = from->target_time_us;
+    }
 
   cairo_region_union (to->surface_damage, from->surface_damage);
   cairo_region_union (to->buffer_damage, from->buffer_damage);
@@ -973,8 +983,10 @@ meta_wayland_surface_ensure_cached_state (MetaWaylandSurface *surface)
 }
 
 /* A content update waits at most this long for its constraints, so a
- * client always makes progress */
+ * client always makes progress; one meant for a given time waits for it,
+ * up to a limit against bogus times */
 #define MAX_UPDATE_WAIT_US (100 * G_USEC_PER_SEC / 1000)
+#define MAX_TIMED_UPDATE_WAIT_US G_USEC_PER_SEC
 
 /* Constraints only hold for a surface being drawn: one that isn't shown
  * (minimized, offscreen, not mapped yet) has its updates applied at once */
@@ -1001,6 +1013,11 @@ update_is_ready (MetaWaylandSurface      *surface,
 
   /* Cleared after the next latching deadline, see meta-wayland-fifo.c */
   if (state->fifo_wait_barrier && surface->fifo.barrier)
+    return FALSE;
+
+  if (state->has_target_time &&
+      !meta_wayland_commit_timing_is_ready (surface, state->target_time_us,
+                                            now_us, wake_up_us))
     return FALSE;
 
   return TRUE;
@@ -1082,7 +1099,11 @@ meta_wayland_surface_process_queued_updates (MetaWaylandSurface *surface)
   while (!g_queue_is_empty (&surface->queued_updates))
     {
       MetaWaylandSurfaceState *state = g_queue_peek_head (&surface->queued_updates);
-      int64_t wake_up_us = surface->queued_since_us + MAX_UPDATE_WAIT_US;
+      int64_t wake_up_us;
+
+      wake_up_us = surface->queued_since_us +
+                   (state->has_target_time ? MAX_TIMED_UPDATE_WAIT_US :
+                                             MAX_UPDATE_WAIT_US);
 
       if (now_us < wake_up_us &&
           !update_is_ready (surface, state, now_us, &wake_up_us))
@@ -1820,6 +1841,7 @@ wl_surface_destructor (struct wl_resource *resource)
   meta_wayland_presentation_time_surface_destroyed (surface);
   clear_queued_updates (surface);
   meta_wayland_fifo_surface_destroyed (surface);
+  meta_wayland_commit_timing_surface_destroyed (surface);
 
   g_clear_handle_id (&surface->update_outputs_idle_id, g_source_remove);
   g_hash_table_foreach (surface->outputs_to_destroy_notify_id,
