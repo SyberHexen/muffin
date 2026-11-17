@@ -63,6 +63,8 @@ typedef struct _ClutterStageViewCoglPrivate
   int64_t update_time;
   int64_t last_update_time;
   int64_t next_presentation_time;
+  /* The refresh the frame on its way was timed for, -1 if not known */
+  int64_t pending_presentation_time;
 } ClutterStageViewCoglPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (ClutterStageViewCogl, clutter_stage_view_cogl,
@@ -200,6 +202,74 @@ view_schedule_update (ClutterStageCogl *stage_cogl,
                          stage_cogl->last_sync_delay,
                          now,
                          &view_priv->next_presentation_time);
+}
+
+/**
+ * clutter_stage_view_get_next_presentation_time: (skip)
+ *
+ * @refresh_interval_out: (out) (optional): the view's refresh interval, in
+ *   microseconds
+ *
+ * Returns: when the next frame @view would draw from now on would be shown
+ *   at the earliest, in microseconds of the monotonic clock; 0 if unknown
+ */
+int64_t
+clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
+                                               int64_t          *refresh_interval_out)
+{
+  ClutterStageViewCoglPrivate *view_priv = view_timing (view);
+  int64_t next_presentation_time;
+  int64_t refresh_interval;
+
+  if (!view_priv || view_priv->refresh_rate <= 0.0)
+    return 0;
+
+  refresh_interval = (int64_t) (0.5 + G_USEC_PER_SEC / view_priv->refresh_rate);
+  if (refresh_interval_out)
+    *refresh_interval_out = refresh_interval;
+
+  /* Its next frame is timed already */
+  if (view_priv->update_time != -1)
+    return MAX (view_priv->next_presentation_time, 0);
+
+  compute_update_time (view_priv->refresh_rate,
+                       view_priv->last_presentation_time,
+                       view_priv->last_update_time,
+                       0,
+                       g_get_monotonic_time (),
+                       &next_presentation_time);
+  if (next_presentation_time <= 0)
+    return 0;
+
+  /* A frame still on its way is shown at the refresh it was timed for, or
+   * else the first one from now on (the monitor may have been idle since
+   * the last frame shown); the next one comes a refresh after it. Once
+   * that refresh has passed, it is on the screen, even if the page flip
+   * event isn't handled yet. */
+  if (clutter_stage_view_has_pending_frame (view))
+    {
+      int64_t now = g_get_monotonic_time ();
+      int64_t pending_presentation_time = view_priv->pending_presentation_time;
+
+      if (pending_presentation_time <= 0 &&
+          view_priv->last_presentation_time > 0)
+        {
+          int64_t since_last = now - view_priv->last_presentation_time;
+          int64_t refreshes = MAX ((since_last + refresh_interval - 1) /
+                                   refresh_interval, 1);
+
+          pending_presentation_time =
+            view_priv->last_presentation_time + refreshes * refresh_interval;
+        }
+
+      if (pending_presentation_time > 0 &&
+          now < pending_presentation_time + refresh_interval / 4)
+        next_presentation_time = MAX (next_presentation_time,
+                                      pending_presentation_time +
+                                      refresh_interval);
+    }
+
+  return next_presentation_time;
 }
 
 /**
@@ -1040,6 +1110,8 @@ clutter_stage_cogl_redraw (ClutterStageWindow *stage_window)
             view_priv->update_time != -1 && view_priv->update_time <= now ?
             view_priv->update_time : now;
           view_priv->update_time = -1;
+          view_priv->pending_presentation_time =
+            view_priv->next_presentation_time;
           view_priv->next_presentation_time = -1;
         }
 
@@ -1141,6 +1213,7 @@ clutter_stage_view_cogl_init (ClutterStageViewCogl *view_cogl)
   view_priv->damage_history = clutter_damage_history_new ();
   view_priv->update_time = -1;
   view_priv->next_presentation_time = -1;
+  view_priv->pending_presentation_time = -1;
 }
 
 static void

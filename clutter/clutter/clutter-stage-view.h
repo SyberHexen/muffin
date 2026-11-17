@@ -81,4 +81,11 @@ gboolean clutter_stage_view_has_pending_frame (ClutterStageView *view);
 CLUTTER_EXPORT
 gboolean clutter_stage_view_has_queued_redraw (ClutterStageView *view);
 
+/* When the next frame the view would draw from now on would be shown at the
+ * earliest (microseconds, monotonic clock; 0 if unknown), and its refresh
+ * interval */
+CLUTTER_EXPORT
+int64_t clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
+                                                       int64_t          *refresh_interval_out);
+
 #endif /* __CLUTTER_STAGE_VIEW_H__ */
