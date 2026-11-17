@@ -202,6 +202,28 @@ get_main_view (MetaWaylandCompositor *compositor,
   return main_view;
 }
 
+/**
+ * meta_wayland_presentation_time_get_main_view:
+ *
+ * Returns: (nullable): the view whose frames time @surface: the fastest
+ *   monitor it is on, NULL if it isn't shown
+ */
+ClutterStageView *
+meta_wayland_presentation_time_get_main_view (MetaWaylandSurface *surface)
+{
+  MetaSurfaceActor *actor = meta_wayland_surface_get_actor (surface);
+  GList *views;
+
+  if (!actor || !clutter_actor_is_mapped (CLUTTER_ACTOR (actor)))
+    return NULL;
+
+  views = clutter_actor_peek_stage_views (CLUTTER_ACTOR (actor));
+  if (!views)
+    return NULL;
+
+  return get_main_view (surface->compositor, surface, views);
+}
+
 static void
 send_presented (MetaWaylandCompositor           *compositor,
                 MetaWaylandPresentationFeedback *feedback,
