@@ -30,6 +30,8 @@
 
 #include "backends/meta-crtc.h"
 #include "backends/native/meta-kms-connector.h"
+#include "backends/native/meta-kms-crtc.h"
+#include "backends/native/meta-kms-device.h"
 #include "backends/native/meta-kms-utils.h"
 #include "backends/native/meta-crtc-kms.h"
 
@@ -415,6 +417,22 @@ init_output_modes (MetaOutput  *output,
   return TRUE;
 }
 
+/* Whether the connector's device has CRTCs that can enable variable refresh */
+static gboolean
+device_can_vary_refresh (MetaKmsConnector *kms_connector)
+{
+  MetaKmsDevice *device = meta_kms_connector_get_device (kms_connector);
+  GList *l;
+
+  for (l = meta_kms_device_get_crtcs (device); l; l = l->next)
+    {
+      if (meta_kms_crtc_get_vrr_enabled_prop_id (l->data))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 MetaOutput *
 meta_create_kms_output (MetaGpuKms        *gpu_kms,
                         MetaKmsConnector  *kms_connector,
@@ -517,6 +535,14 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
   output->supports_underscanning =
     meta_kms_connector_is_underscanning_supported (kms_connector);
 
+  {
+    const MetaKmsConnectorState *connector_state =
+      meta_kms_connector_get_current_state (kms_connector);
+
+    output->vrr_capable = connector_state && connector_state->vrr_capable &&
+                          device_can_vary_refresh (kms_connector);
+  }
+
   output->supported_rgb_ranges =
     meta_kms_connector_get_supported_rgb_ranges (kms_connector);
   output->supported_color_formats =
@@ -542,6 +568,7 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
   if (old_output)
     {
       output->no_hdr_auto_switch = old_output->no_hdr_auto_switch;
+      output->vrr_mode = old_output->vrr_mode;
       output->sdr_white_level = old_output->sdr_white_level;
       output->hdr_peak_luminance = old_output->hdr_peak_luminance;
     }

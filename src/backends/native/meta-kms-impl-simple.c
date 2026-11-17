@@ -204,6 +204,53 @@ process_connector_property (MetaKmsImpl    *impl,
 }
 
 static gboolean
+process_crtc_property (MetaKmsImpl    *impl,
+                       MetaKmsUpdate  *update,
+                       gpointer        update_entry,
+                       GError        **error)
+{
+  MetaKmsCrtcProperty *crtc_property = update_entry;
+  MetaKmsCrtc *crtc = crtc_property->crtc;
+  MetaKmsDevice *device = meta_kms_crtc_get_device (crtc);
+  MetaKmsImplDevice *impl_device = meta_kms_device_get_impl_device (device);
+  uint32_t crtc_id = meta_kms_crtc_get_id (crtc);
+  drmModeObjectProperties *props;
+  gboolean is_current = FALSE;
+  uint32_t i;
+  int fd;
+  int ret;
+
+  fd = meta_kms_impl_device_get_fd (impl_device);
+
+  props = drmModeObjectGetProperties (fd, crtc_id, DRM_MODE_OBJECT_CRTC);
+  for (i = 0; props && i < props->count_props; i++)
+    {
+      if (props->props[i] == crtc_property->prop_id)
+        {
+          is_current = props->prop_values[i] == crtc_property->value;
+          break;
+        }
+    }
+  drmModeFreeObjectProperties (props);
+  if (is_current)
+    return TRUE;
+
+  ret = drmModeObjectSetProperty (fd, crtc_id, DRM_MODE_OBJECT_CRTC,
+                                  crtc_property->prop_id,
+                                  crtc_property->value);
+  if (ret != 0)
+    {
+      /* A driver that refuses it (variable refresh with a mode it can't
+       * vary) leaves the CRTC as it was: not worth failing the frame */
+      g_warning ("CRTC %u refused property %u = %u: %s",
+                 crtc_id, crtc_property->prop_id,
+                 (unsigned int) crtc_property->value, g_strerror (-ret));
+    }
+
+  return TRUE;
+}
+
+static gboolean
 process_plane_property (MetaKmsImpl      *impl,
                         MetaKmsPlane     *plane,
                         MetaKmsProperty  *prop,
@@ -1710,6 +1757,13 @@ meta_kms_impl_simple_process_update (MetaKmsImpl   *impl,
                         update,
                         meta_kms_update_get_crtc_gammas (update),
                         process_crtc_gamma,
+                        &error))
+    goto err_planes_not_assigned;
+
+  if (!process_entries (impl,
+                        update,
+                        meta_kms_update_get_crtc_properties (update),
+                        process_crtc_property,
                         &error))
     goto err_planes_not_assigned;
 

@@ -20,6 +20,9 @@
 #include "config.h"
 
 #include "backends/native/meta-kms-crtc.h"
+
+#include <string.h>
+#include <xf86drmMode.h>
 #include "backends/native/meta-kms-crtc-private.h"
 
 #include "backends/native/meta-kms-device-private.h"
@@ -36,6 +39,8 @@ struct _MetaKmsCrtc
   int idx;
 
   MetaKmsCrtcState current_state;
+
+  uint32_t vrr_enabled_prop_id;
 
   /* The gamma ramp clients asked for: on outputs in the BT.2100 color mode
    * the compositor applies it before converting to PQ, and the hardware
@@ -276,6 +281,36 @@ meta_kms_crtc_predict_state (MetaKmsCrtc   *crtc,
     }
 }
 
+static void
+find_vrr_enabled_prop_id (MetaKmsCrtc       *crtc,
+                          MetaKmsImplDevice *impl_device)
+{
+  int fd = meta_kms_impl_device_get_fd (impl_device);
+  drmModeObjectProperties *props;
+  uint32_t i;
+
+  props = drmModeObjectGetProperties (fd, crtc->id, DRM_MODE_OBJECT_CRTC);
+  if (!props)
+    return;
+
+  for (i = 0; i < props->count_props; i++)
+    {
+      drmModePropertyRes *prop = drmModeGetProperty (fd, props->props[i]);
+
+      if (prop && strcmp (prop->name, "VRR_ENABLED") == 0)
+        crtc->vrr_enabled_prop_id = prop->prop_id;
+      drmModeFreeProperty (prop);
+    }
+
+  drmModeFreeObjectProperties (props);
+}
+
+uint32_t
+meta_kms_crtc_get_vrr_enabled_prop_id (MetaKmsCrtc *crtc)
+{
+  return crtc->vrr_enabled_prop_id;
+}
+
 MetaKmsCrtc *
 meta_kms_crtc_new (MetaKmsImplDevice *impl_device,
                    drmModeCrtc       *drm_crtc,
@@ -289,6 +324,7 @@ meta_kms_crtc_new (MetaKmsImplDevice *impl_device,
   crtc->idx = idx;
 
   meta_kms_crtc_read_state (crtc, impl_device, drm_crtc);
+  find_vrr_enabled_prop_id (crtc, impl_device);
 
   return crtc;
 }

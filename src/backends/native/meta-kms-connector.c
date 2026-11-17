@@ -545,6 +545,8 @@ state_set_properties (MetaKmsConnectorState *state,
       else if ((prop->flags & DRM_MODE_PROP_RANGE) &&
                strcmp (prop->name, "hotplug_mode_update") == 0)
         state->hotplug_mode_update = drm_connector->prop_values[i];
+      else if (strcmp (prop->name, "vrr_capable") == 0)
+        state->vrr_capable = drm_connector->prop_values[i] != 0;
       else if (strcmp (prop->name, "scaling mode") == 0)
         state->has_scaling = TRUE;
       else if ((prop->flags & DRM_MODE_PROP_ENUM) &&

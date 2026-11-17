@@ -81,6 +81,13 @@ typedef struct _MetaKmsConnectorProperty
   uint64_t value;
 } MetaKmsConnectorProperty;
 
+typedef struct _MetaKmsCrtcProperty
+{
+  MetaKmsCrtc *crtc;
+  uint32_t prop_id;
+  uint64_t value;
+} MetaKmsCrtcProperty;
+
 typedef struct _MetaKmsCrtcGamma
 {
   MetaKmsCrtc *crtc;
@@ -140,6 +147,8 @@ GList * meta_kms_update_get_mode_sets (MetaKmsUpdate *update);
 GList * meta_kms_update_get_page_flips (MetaKmsUpdate *update);
 
 GList * meta_kms_update_get_connector_properties (MetaKmsUpdate *update);
+
+GList * meta_kms_update_get_crtc_properties (MetaKmsUpdate *update);
 
 GList * meta_kms_update_get_crtc_gammas (MetaKmsUpdate *update);
 

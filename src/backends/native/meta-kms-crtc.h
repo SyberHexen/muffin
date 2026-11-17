@@ -75,6 +75,9 @@ const MetaKmsCrtcState * meta_kms_crtc_get_current_state (MetaKmsCrtc *crtc);
 
 uint32_t meta_kms_crtc_get_id (MetaKmsCrtc *crtc);
 
+/* The CRTC's "VRR_ENABLED" property, 0 if it has none */
+uint32_t meta_kms_crtc_get_vrr_enabled_prop_id (MetaKmsCrtc *crtc);
+
 int meta_kms_crtc_get_idx (MetaKmsCrtc *crtc);
 
 #endif /* META_KMS_CRTC_H */

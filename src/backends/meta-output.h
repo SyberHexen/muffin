@@ -113,6 +113,10 @@ struct _MetaOutput
   unsigned int supported_color_formats;
   MetaOutputColorMode color_mode;
   unsigned int supported_color_modes;
+
+  /* Variable refresh rate: whether the sink can take it, and when to use it */
+  gboolean vrr_capable;
+  MetaOutputVrrMode vrr_mode;
   /* HDR: whether HDR passthrough may not switch the output to the BT.2100
    * color mode by itself, and the luminance SDR white is shown at in that
    * color mode, in cd/m² (0 for the default) */

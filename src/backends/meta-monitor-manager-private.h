@@ -97,6 +97,7 @@ struct _MetaOutputInfo
   MetaOutputColorFormat color_format;
   MetaOutputColorMode color_mode;
   gboolean no_hdr_auto_switch;
+  MetaOutputVrrMode vrr_mode;
   unsigned int sdr_white_level;
   unsigned int hdr_peak_luminance;
 };

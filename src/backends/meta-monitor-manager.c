@@ -1768,6 +1768,25 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
                             "rgb-range", "supported-rgb-ranges",
                             meta_monitor_get_rgb_range (monitor),
                             meta_monitor_get_supported_rgb_ranges (monitor));
+      if (meta_monitor_is_vrr_capable (monitor))
+        {
+          GVariantBuilder vrr_modes_builder;
+          uint32_t vrr_mode;
+
+          g_variant_builder_init (&vrr_modes_builder, G_VARIANT_TYPE ("au"));
+          for (vrr_mode = META_OUTPUT_VRR_MODE_OFF;
+               vrr_mode <= META_OUTPUT_VRR_MODE_LAST;
+               vrr_mode++)
+            g_variant_builder_add (&vrr_modes_builder, "u", vrr_mode);
+
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "vrr-mode",
+                                 g_variant_new_uint32 (
+                                   meta_monitor_get_vrr_mode (monitor)));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "supported-vrr-modes",
+                                 g_variant_builder_end (&vrr_modes_builder));
+        }
       add_supported_values (&monitor_properties_builder,
                             "color-format", "supported-color-formats",
                             meta_monitor_get_color_format (monitor),
@@ -2193,6 +2212,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   uint32_t color_format;
   uint32_t color_mode;
   gboolean hdr_auto_switch;
+  uint32_t vrr_mode;
   uint32_t sdr_white_level;
   uint32_t hdr_peak_luminance;
 
@@ -2299,6 +2319,22 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
                          &hdr_auto_switch))
     hdr_auto_switch = meta_monitor_get_hdr_auto_switch (monitor);
 
+  if (g_variant_lookup (properties_variant, "vrr-mode", "u", &vrr_mode))
+    {
+      if (vrr_mode > META_OUTPUT_VRR_MODE_LAST ||
+          (vrr_mode != META_OUTPUT_VRR_MODE_OFF &&
+           !meta_monitor_is_vrr_capable (monitor)))
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "VRR mode %u requested but unsupported", vrr_mode);
+          return NULL;
+        }
+    }
+  else
+    {
+      vrr_mode = meta_monitor_get_vrr_mode (monitor);
+    }
+
   if (g_variant_lookup (properties_variant, "sdr-white-level", "u",
                         &sdr_white_level))
     {
@@ -2352,6 +2388,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
     .color_format = color_format,
     .color_mode = color_mode,
     .no_hdr_auto_switch = !hdr_auto_switch,
+    .vrr_mode = vrr_mode,
     .sdr_white_level = sdr_white_level,
     .hdr_peak_luminance = hdr_peak_luminance,
   };

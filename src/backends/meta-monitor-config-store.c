@@ -85,6 +85,7 @@
  *         <colorformat>rgb</colorformat>
  *         <colormode>bt2100</colormode>
  *         <hdrautoswitch>no</hdrautoswitch>
+ *         <vrrmode>automatic</vrrmode>
  *         <sdrwhitelevel>240</sdrwhitelevel>
  *         <hdrpeakluminance>600</hdrpeakluminance>
  *       </monitor>
@@ -171,6 +172,7 @@ typedef enum
   STATE_MONITOR_COLOR_FORMAT,
   STATE_MONITOR_COLOR_MODE,
   STATE_MONITOR_HDR_AUTO_SWITCH,
+  STATE_MONITOR_VRR_MODE,
   STATE_MONITOR_SDR_WHITE_LEVEL,
   STATE_MONITOR_HDR_PEAK_LUMINANCE,
   STATE_DISABLED,
@@ -411,6 +413,10 @@ handle_start_element (GMarkupParseContext  *context,
           {
             parser->state = STATE_MONITOR_HDR_AUTO_SWITCH;
           }
+        else if (g_str_equal (element_name, "vrrmode"))
+          {
+            parser->state = STATE_MONITOR_VRR_MODE;
+          }
         else if (g_str_equal (element_name, "sdrwhitelevel"))
           {
             parser->state = STATE_MONITOR_SDR_WHITE_LEVEL;
@@ -510,6 +516,7 @@ handle_start_element (GMarkupParseContext  *context,
     case STATE_MONITOR_COLOR_FORMAT:
     case STATE_MONITOR_COLOR_MODE:
     case STATE_MONITOR_HDR_AUTO_SWITCH:
+    case STATE_MONITOR_VRR_MODE:
     case STATE_MONITOR_SDR_WHITE_LEVEL:
     case STATE_MONITOR_HDR_PEAK_LUMINANCE:
       {
@@ -729,6 +736,7 @@ handle_end_element (GMarkupParseContext  *context,
     case STATE_MONITOR_COLOR_FORMAT:
     case STATE_MONITOR_COLOR_MODE:
     case STATE_MONITOR_HDR_AUTO_SWITCH:
+    case STATE_MONITOR_VRR_MODE:
     case STATE_MONITOR_SDR_WHITE_LEVEL:
     case STATE_MONITOR_HDR_PEAK_LUMINANCE:
       {
@@ -948,6 +956,11 @@ static const char * const color_format_names[] = {
 /* Indexed by MetaOutputColorMode */
 static const char * const color_mode_names[] = {
   "default", "bt2100",
+};
+
+/* Indexed by MetaOutputVrrMode */
+static const char * const vrr_mode_names[] = {
+  "off", "automatic", "always",
 };
 
 static int
@@ -1214,6 +1227,20 @@ handle_text (GMarkupParseContext *context,
         return;
       }
 
+    case STATE_MONITOR_VRR_MODE:
+      {
+        int value = value_from_name (vrr_mode_names,
+                                     G_N_ELEMENTS (vrr_mode_names),
+                                     text, text_len);
+
+        if (value < 0)
+          g_set_error (error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT,
+                       "Invalid VRR mode %.*s", (int) text_len, text);
+        else
+          parser->current_monitor_config->vrr_mode = value;
+        return;
+      }
+
     case STATE_MONITOR_SDR_WHITE_LEVEL:
       {
         int value;
@@ -1391,6 +1418,10 @@ append_monitors (GString *buffer,
                                 color_mode_names[monitor_config->color_mode]);
       if (monitor_config->no_hdr_auto_switch)
         g_string_append (buffer, "        <hdrautoswitch>no</hdrautoswitch>\n");
+      if (monitor_config->vrr_mode > META_OUTPUT_VRR_MODE_OFF &&
+          monitor_config->vrr_mode < G_N_ELEMENTS (vrr_mode_names))
+        g_string_append_printf (buffer, "        <vrrmode>%s</vrrmode>\n",
+                                vrr_mode_names[monitor_config->vrr_mode]);
       if (monitor_config->sdr_white_level)
         g_string_append_printf (buffer, "        <sdrwhitelevel>%u</sdrwhitelevel>\n",
                                 monitor_config->sdr_white_level);

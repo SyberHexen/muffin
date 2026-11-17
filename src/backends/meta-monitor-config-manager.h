@@ -41,6 +41,7 @@ typedef struct _MetaMonitorConfig
    * color mode by itself, and the luminance SDR white is shown at in that
    * color mode, in cd/m² (0 for the default) */
   gboolean no_hdr_auto_switch;
+  MetaOutputVrrMode vrr_mode;
   unsigned int sdr_white_level;
   /* The display's peak luminance in cd/m² to use instead of its EDID's,
    * 0 for none */
