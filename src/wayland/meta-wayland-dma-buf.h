@@ -55,6 +55,14 @@ meta_wayland_dma_buf_buffer_attach (MetaWaylandBuffer  *buffer,
 MetaWaylandDmaBufBuffer *
 meta_wayland_dma_buf_from_buffer (MetaWaylandBuffer *buffer);
 
+gboolean meta_wayland_dma_buf_buffer_is_yuv (MetaWaylandBuffer *buffer);
+
+void meta_wayland_dma_buf_buffer_set_yuv_conversion (MetaWaylandBuffer *buffer,
+                                                     gboolean           has_conversion,
+                                                     float              kr,
+                                                     float              kb,
+                                                     gboolean           full_range);
+
 CoglScanout *
 meta_wayland_dma_buf_try_acquire_scanout (MetaWaylandDmaBufBuffer *dma_buf,
                                           CoglOnscreen            *onscreen);

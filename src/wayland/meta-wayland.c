@@ -35,6 +35,7 @@
 #include "wayland/meta-wayland-activation.h"
 #include "wayland/meta-wayland-cursor-shape.h"
 #include "wayland/meta-wayland-color-management.h"
+#include "wayland/meta-wayland-color-representation.h"
 #include "wayland/meta-wayland-fractional-scale.h"
 #include "wayland/meta-wayland-commit-timing.h"
 #include "wayland/meta-wayland-fifo.h"
@@ -619,6 +620,7 @@ meta_wayland_compositor_setup (MetaWaylandCompositor *wayland_compositor)
   meta_wayland_init_fifo (compositor);
   meta_wayland_init_commit_timing (compositor);
   meta_wayland_init_tearing_control (compositor);
+  meta_wayland_init_color_representation (compositor);
   meta_wayland_keyboard_shortcuts_inhibit_init (compositor);
   meta_wayland_surface_inhibit_shortcuts_dialog_init ();
   meta_wayland_text_input_init (compositor);
