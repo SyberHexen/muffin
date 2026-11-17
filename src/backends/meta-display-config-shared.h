@@ -36,4 +36,17 @@ typedef enum
   META_POWER_SAVE_OFF,
 } MetaPowerSave;
 
+/*
+ * Variable refresh rate. The values are the ones of the "vrr-mode" property
+ * of the DisplayConfig interface.
+ */
+typedef enum
+{
+  META_OUTPUT_VRR_MODE_OFF = 0,
+  META_OUTPUT_VRR_MODE_AUTOMATIC = 1,  /* while a window is fullscreen */
+  META_OUTPUT_VRR_MODE_ALWAYS = 2,
+} MetaOutputVrrMode;
+
+#define META_OUTPUT_VRR_MODE_LAST META_OUTPUT_VRR_MODE_ALWAYS
+
 #endif /* META_DISPLAY_CONFIG_SHARED_H */

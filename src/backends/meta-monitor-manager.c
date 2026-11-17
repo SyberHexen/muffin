@@ -1735,6 +1735,26 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
                                  g_variant_new_boolean (is_underscanning));
         }
 
+      if (meta_monitor_is_vrr_capable (monitor))
+        {
+          GVariantBuilder vrr_modes_builder;
+          uint32_t vrr_mode;
+
+          g_variant_builder_init (&vrr_modes_builder, G_VARIANT_TYPE ("au"));
+          for (vrr_mode = META_OUTPUT_VRR_MODE_OFF;
+               vrr_mode <= META_OUTPUT_VRR_MODE_LAST;
+               vrr_mode++)
+            g_variant_builder_add (&vrr_modes_builder, "u", vrr_mode);
+
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "vrr-mode",
+                                 g_variant_new_uint32 (
+                                   meta_monitor_get_vrr_mode (monitor)));
+          g_variant_builder_add (&monitor_properties_builder, "{sv}",
+                                 "supported-vrr-modes",
+                                 g_variant_builder_end (&vrr_modes_builder));
+        }
+
       is_builtin = meta_monitor_is_laptop_panel (monitor);
       g_variant_builder_add (&monitor_properties_builder, "{sv}",
                              "is-builtin",
@@ -2088,6 +2108,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   g_autoptr (GVariant) properties_variant = NULL;
   gboolean enable_underscanning = FALSE;
   gboolean set_underscanning = FALSE;
+  uint32_t vrr_mode;
 
   g_variant_get (monitor_config_variant, "(ss@a{sv})",
                  &connector,
@@ -2123,6 +2144,23 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
         }
     }
 
+  /* Clients that don't know VRR leave it as it is */
+  if (g_variant_lookup (properties_variant, "vrr-mode", "u", &vrr_mode))
+    {
+      if (vrr_mode > META_OUTPUT_VRR_MODE_LAST ||
+          (vrr_mode != META_OUTPUT_VRR_MODE_OFF &&
+           !meta_monitor_is_vrr_capable (monitor)))
+        {
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "VRR mode %u requested but unsupported", vrr_mode);
+          return NULL;
+        }
+    }
+  else
+    {
+      vrr_mode = meta_monitor_get_vrr_mode (monitor);
+    }
+
   monitor_spec = meta_monitor_spec_clone (meta_monitor_get_spec (monitor));
 
   monitor_mode_spec = g_new0 (MetaMonitorModeSpec, 1);
@@ -2132,7 +2170,8 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   *monitor_config = (MetaMonitorConfig) {
     .monitor_spec = monitor_spec,
     .mode_spec = monitor_mode_spec,
-    .enable_underscanning = enable_underscanning
+    .enable_underscanning = enable_underscanning,
+    .vrr_mode = vrr_mode,
   };
 
   return monitor_config;

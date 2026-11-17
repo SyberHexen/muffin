@@ -239,6 +239,8 @@ apply_crtc_assignments (MetaMonitorManager *manager,
       output->is_primary = output_info->is_primary;
       output->is_presentation = output_info->is_presentation;
       output->is_underscanning = output_info->is_underscanning;
+      output->vrr_mode = output->vrr_capable ? output_info->vrr_mode
+                                             : META_OUTPUT_VRR_MODE_OFF;
     }
 
   /* Disable outputs not mentioned in the list */
