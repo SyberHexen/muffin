@@ -30,6 +30,7 @@
 
 #include "cogl/cogl.h"
 #include "wayland/meta-wayland-types.h"
+#include "wayland/meta-wayland-linux-drm-syncobj.h"
 #include "wayland/meta-wayland-egl-stream.h"
 #include "wayland/meta-wayland-dma-buf.h"
 #include "wayland/meta-wayland-single-pixel-buffer.h"
@@ -77,6 +78,10 @@ struct _MetaWaylandBuffer
     MetaWaylandSinglePixelBuffer *single_pixel_buffer;
     CoglTexture *texture;
   } single_pixel;
+
+  /* wp_linux_drm_syncobj_v1 release points of commits of this buffer, to
+   * signal once the compositor has released it */
+  GPtrArray *release_points;
 };
 
 #define META_TYPE_WAYLAND_BUFFER (meta_wayland_buffer_get_type ())
@@ -99,5 +104,10 @@ void                    meta_wayland_buffer_process_damage      (MetaWaylandBuff
 void meta_wayland_init_shm (MetaWaylandCompositor *compositor);
 CoglScanout *           meta_wayland_buffer_try_acquire_scanout (MetaWaylandBuffer     *buffer,
                                                                  CoglOnscreen          *onscreen);
+
+void meta_wayland_buffer_add_release_point (MetaWaylandBuffer    *buffer,
+                                            MetaWaylandSyncPoint *release_point);
+
+void meta_wayland_buffer_signal_release_points (MetaWaylandBuffer *buffer);
 
 #endif /* META_WAYLAND_BUFFER_H */

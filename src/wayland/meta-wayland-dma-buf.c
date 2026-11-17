@@ -40,6 +40,10 @@
 #include "wayland/meta-wayland-dma-buf.h"
 
 #include <drm_fourcc.h>
+#include <linux/dma-buf.h>
+#include <linux/sync_file.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -88,6 +92,84 @@ struct _MetaWaylandDmaBufBuffer
 };
 
 G_DEFINE_TYPE (MetaWaylandDmaBufBuffer, meta_wayland_dma_buf_buffer, G_TYPE_OBJECT);
+
+static gboolean
+is_first_plane_fd (MetaWaylandDmaBufBuffer *dma_buf,
+                   int                      i)
+{
+  int j;
+
+  for (j = 0; j < i; j++)
+    {
+      if (dma_buf->fds[j] == dma_buf->fds[i])
+        return FALSE;
+    }
+  return TRUE;
+}
+
+gboolean
+meta_wayland_dma_buf_import_sync_file (MetaWaylandDmaBufBuffer *dma_buf,
+                                       int                      sync_fd)
+{
+  gboolean imported = FALSE;
+  int i;
+
+  for (i = 0; i < META_WAYLAND_DMA_BUF_MAX_FDS; i++)
+    {
+      struct dma_buf_import_sync_file import = {
+        .flags = DMA_BUF_SYNC_WRITE,
+        .fd = sync_fd,
+      };
+
+      if (dma_buf->fds[i] < 0 || !is_first_plane_fd (dma_buf, i))
+        continue;
+
+      if (ioctl (dma_buf->fds[i], DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) != 0)
+        return FALSE;
+      imported = TRUE;
+    }
+
+  return imported;
+}
+
+int
+meta_wayland_dma_buf_export_sync_file (MetaWaylandDmaBufBuffer *dma_buf)
+{
+  int merged_fd = -1;
+  int i;
+
+  for (i = 0; i < META_WAYLAND_DMA_BUF_MAX_FDS; i++)
+    {
+      struct dma_buf_export_sync_file export = {
+        .flags = DMA_BUF_SYNC_WRITE,
+        .fd = -1,
+      };
+
+      if (dma_buf->fds[i] < 0 || !is_first_plane_fd (dma_buf, i))
+        continue;
+
+      if (ioctl (dma_buf->fds[i], DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &export) != 0)
+        continue;
+
+      if (merged_fd < 0)
+        {
+          merged_fd = export.fd;
+        }
+      else
+        {
+          struct sync_merge_data merge = { .name = "muffin", .fd2 = export.fd };
+
+          if (ioctl (merged_fd, SYNC_IOC_MERGE, &merge) == 0)
+            {
+              close (merged_fd);
+              merged_fd = merge.fence;
+            }
+          close (export.fd);
+        }
+    }
+
+  return merged_fd;
+}
 
 /* Compatible with zwp_linux_dmabuf_feedback_v1.tranche_flags */
 typedef enum _MetaWaylandDmaBufTrancheFlags
