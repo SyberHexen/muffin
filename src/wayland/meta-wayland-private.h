@@ -84,6 +84,10 @@ struct _MetaWaylandCompositor
   char *display_name;
   GHashTable *outputs;
   GList *frame_callback_surfaces;
+  /* Frame callbacks held back for surfaces on a view still waiting for its
+   * last frame; sent once a frame completes */
+  gboolean frame_callbacks_held;
+  guint held_frame_callbacks_idle_id;
 
   MetaXWaylandManager xwayland_manager;
 
