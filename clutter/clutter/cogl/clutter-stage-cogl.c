@@ -371,7 +371,7 @@ clutter_stage_cogl_get_update_time (ClutterStageWindow *stage_window)
 
       any_free = TRUE;
 
-      if (!view_priv || !clutter_stage_view_has_redraw_clip (view))
+      if (!view_priv || !clutter_stage_view_has_queued_redraw (view))
         continue;
 
       /* Missed its time (something blocked): time it again */
