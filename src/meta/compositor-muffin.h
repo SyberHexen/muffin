@@ -45,6 +45,9 @@ META_EXPORT
 ClutterActor *meta_get_bottom_window_group_for_display   (MetaDisplay *display);
 
 META_EXPORT
+ClutterActor *meta_get_background_window_group_for_display (MetaDisplay *display);
+
+META_EXPORT
 ClutterActor *meta_get_feedback_group_for_display   (MetaDisplay *display);
 
 META_EXPORT

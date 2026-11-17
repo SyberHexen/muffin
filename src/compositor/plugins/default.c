@@ -421,9 +421,14 @@ start (MetaPlugin *plugin)
   MetaDisplay *display = meta_plugin_get_display (plugin);
   MetaMonitorManager *monitor_manager = meta_monitor_manager_get ();
 
+  /* In the background window group, which the compositor keeps below every
+   * window: in the window group it would rise above the windows whenever they
+   * are restacked (sync_actor_stacking () lowers each window actor to the
+   * bottom in turn), and its opaque fills would hide them all. On top of
+   * that group, so it still covers wallpaper surfaces it shows itself. */
   self->priv->background_group = clutter_actor_new ();
-  clutter_actor_insert_child_below (meta_get_window_group_for_display (display),
-                                    self->priv->background_group, NULL);
+  clutter_actor_add_child (meta_get_background_window_group_for_display (display),
+                           self->priv->background_group);
 
   g_signal_connect (monitor_manager, "monitors-changed",
                     G_CALLBACK (on_monitors_changed), plugin);
