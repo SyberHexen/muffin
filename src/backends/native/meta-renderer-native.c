@@ -1631,6 +1631,10 @@ update_vrr (MetaOnscreenNative *onscreen_native,
 
   meta_kms_update_set_crtc_property (kms_update, kms_crtc, prop_id, wanted);
   onscreen_native->vrr_enabled = wanted;
+
+  if (onscreen_native->view)
+    clutter_stage_view_set_vrr_active (CLUTTER_STAGE_VIEW (onscreen_native->view),
+                                       wanted);
 }
 
 static void
