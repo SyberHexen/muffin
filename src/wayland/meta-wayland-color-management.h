@@ -46,7 +46,8 @@ gboolean meta_wayland_color_description_get_conversion (MetaWaylandColorDescript
 
 gboolean meta_wayland_color_description_needs_conversion (MetaWaylandColorDescription *description);
 
-float meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description);
+float meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description,
+                                                       MetaWaylandSurface          *surface);
 
 /* Re-evaluate the preferred image description after the surface moved */
 void meta_wayland_color_management_update_surface (MetaWaylandSurface *surface);
