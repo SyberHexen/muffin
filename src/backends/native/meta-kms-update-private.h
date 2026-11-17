@@ -104,6 +104,8 @@ typedef struct _MetaKmsPageFlip
   gpointer user_data;
   MetaKmsCustomPageFlipFunc custom_page_flip_func;
   gpointer custom_page_flip_user_data;
+  /* Flip at once instead of at the next vertical blank (it may tear) */
+  gboolean async;
 } MetaKmsPageFlip;
 
 void meta_kms_plane_feedback_free (MetaKmsPlaneFeedback *plane_feedback);

@@ -164,6 +164,21 @@ COGL_EXPORT
 gboolean cogl_frame_info_get_hw_clock (CoglFrameInfo *info);
 
 /**
+ * cogl_frame_info_get_tearing: (skip)
+ *
+ * Returns: whether the frame was shown at once, not at the vertical blank
+ */
+COGL_EXPORT
+gboolean cogl_frame_info_get_tearing (CoglFrameInfo *info);
+
+/**
+ * cogl_frame_info_set_tearing: (skip)
+ */
+COGL_EXPORT
+void cogl_frame_info_set_tearing (CoglFrameInfo *info,
+                                  gboolean       tearing);
+
+/**
  * cogl_frame_info_set_hw_timing: (skip)
  */
 COGL_EXPORT

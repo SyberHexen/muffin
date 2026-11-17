@@ -130,6 +130,8 @@ struct _ClutterFrameInfo
    * whether presentation_time comes from the display hardware */
   int64_t sequence;
   gboolean hw_clock;
+  /* The frame was shown at once, not at the vertical blank */
+  gboolean tearing;
 };
 
 typedef struct _ClutterCapture

@@ -97,4 +97,13 @@ void clutter_stage_view_set_vrr_active (ClutterStageView *view,
 CLUTTER_EXPORT
 gboolean clutter_stage_view_is_vrr_active (ClutterStageView *view);
 
+/* Whether the view's next frames are shown at once instead of at the
+ * monitor's vertical blank: they may tear */
+CLUTTER_EXPORT
+void clutter_stage_view_set_tearing (ClutterStageView *view,
+                                     gboolean          tearing);
+
+CLUTTER_EXPORT
+gboolean clutter_stage_view_is_tearing (ClutterStageView *view);
+
 #endif /* __CLUTTER_STAGE_VIEW_H__ */

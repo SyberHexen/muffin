@@ -106,6 +106,11 @@ void meta_kms_update_page_flip (MetaKmsUpdate                 *update,
                                 const MetaKmsPageFlipFeedback *feedback,
                                 gpointer                       user_data);
 
+/* The page flip of @crtc in @update is done at once, not at the next
+ * vertical blank: the new frame may tear */
+void meta_kms_update_set_page_flip_async (MetaKmsUpdate *update,
+                                          MetaKmsCrtc   *crtc);
+
 void meta_kms_update_custom_page_flip (MetaKmsUpdate                 *update,
                                        MetaKmsCrtc                   *crtc,
                                        const MetaKmsPageFlipFeedback *feedback,
