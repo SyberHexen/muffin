@@ -373,7 +373,8 @@ meta_wayland_presentation_time_present (MetaWaylandCompositor *compositor,
   if (wl_list_empty (&compositor->presentation_time.in_flight))
     return;
 
-  flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC;
+  /* A frame flipped at once wasn't synchronized to the vertical blank */
+  flags = frame_info->tearing ? 0 : WP_PRESENTATION_FEEDBACK_KIND_VSYNC;
   if (frame_info->hw_clock && frame_info->presentation_time != 0)
     {
       /* The page flip's time, CLOCK_MONOTONIC like the clock we announce */

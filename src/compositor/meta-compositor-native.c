@@ -31,6 +31,7 @@
 #include "meta/prefs.h"
 #include "meta/util.h"
 #include "wayland/meta-wayland-surface.h"
+#include "wayland/meta-wayland-tearing-control.h"
 
 struct _MetaCompositorNative
 {
@@ -86,6 +87,19 @@ ensure_view_scanout_candidate (ClutterStageView *stage_view)
  * framebuffer, which scanning out bypasses entirely — the pointer would vanish
  * over the scanned-out window.
  */
+/* MUFFIN_DEBUG_NO_TEARING=1 keeps every frame on the vertical blank, for
+ * comparisons */
+static gboolean
+tearing_allowed (void)
+{
+  static int allowed = -1;
+
+  if (allowed == -1)
+    allowed = g_strcmp0 (g_getenv ("MUFFIN_DEBUG_NO_TEARING"), "1") != 0;
+
+  return allowed;
+}
+
 static gboolean
 software_cursor_overlaps_view (const MetaRectangle *view_layout)
 {
@@ -313,6 +327,12 @@ maybe_assign_primary_plane (MetaCompositor *compositor)
           reason = NULL;
           clutter_stage_view_assign_next_scanout (stage_view, scanout);
 
+          /* A fullscreen surface scanned out directly may have its frames
+           * shown at once, if it asks to (games with vsync off) */
+          clutter_stage_view_set_tearing (stage_view,
+                                          tearing_allowed () &&
+                                          meta_wayland_surface_wants_tearing (surface));
+
           n_engaged++;
           if (!engaged_title)
             engaged_title = meta_window_get_title (window);
@@ -337,7 +357,10 @@ reconcile:
            * view finally repaints — showing a stale buffer instead of the
            * content that made it stop qualifying. */
           if (!scanout)
-            clutter_stage_view_assign_next_scanout (stage_view, NULL);
+            {
+              clutter_stage_view_assign_next_scanout (stage_view, NULL);
+              clutter_stage_view_set_tearing (stage_view, FALSE);
+            }
 
           if (old_candidate && old_candidate != new_candidate)
             {
