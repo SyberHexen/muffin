@@ -3618,35 +3618,6 @@ should_force_shadow_fb (MetaRendererNative *renderer_native,
   return FALSE;
 }
 
-/* Test switch: MUFFIN_SDR_EDID_COLORS=1 shows SDR colors on a wide gamut
- * display in their own (BT.709) colors, converted to the display's primaries
- * from its EDID, instead of letting the display stretch them over its whole
- * gamut */
-static gboolean
-output_wants_sdr_colors_mapped (MetaOutput *output)
-{
-  static const double bt709[6] = { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06 };
-  static int enabled = -1;
-  int i;
-
-  if (enabled < 0)
-    enabled = g_strcmp0 (g_getenv ("MUFFIN_SDR_EDID_COLORS"), "1") == 0;
-
-  if (!enabled ||
-      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100 ||
-      !output->has_edid_primaries)
-    return FALSE;
-
-  /* A display with (about) BT.709 primaries needs no conversion */
-  for (i = 0; i < 6; i++)
-    {
-      if (fabs (output->edid_primaries[i] - bt709[i]) > 0.01)
-        return TRUE;
-    }
-
-  return FALSE;
-}
-
 static MetaRendererView *
 meta_renderer_native_create_view (MetaRenderer       *renderer,
                                   MetaLogicalMonitor *logical_monitor,
@@ -3694,7 +3665,9 @@ meta_renderer_native_create_view (MetaRenderer       *renderer,
                                              logical_monitor,
                                              output,
                                              crtc);
-  map_to_display = output_wants_sdr_colors_mapped (output);
+  /* Mapped in the view only where the CRTC's color pipeline can't */
+  map_to_display = meta_output_kms_wants_sdr_colors_mapped (output) &&
+                   !meta_output_kms_maps_sdr_colors_in_hardware (output);
 
   /* An output in the BT.2100 color mode is composited in its SDR encoding, in
    * half floats so HDR content can go past SDR white, and converted to PQ

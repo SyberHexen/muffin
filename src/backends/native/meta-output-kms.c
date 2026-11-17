@@ -25,9 +25,11 @@
 #include "backends/native/meta-output-kms.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "backends/meta-color-transform.h"
 #include "backends/meta-crtc.h"
 #include "backends/native/meta-kms-connector.h"
 #include "backends/native/meta-kms-utils.h"
@@ -150,6 +152,56 @@ meta_output_kms_set_underscan (MetaOutput    *output,
     }
 }
 
+/* Test switch: MUFFIN_SDR_EDID_COLORS=1 shows SDR colors on a wide gamut
+ * display in their own (BT.709) colors, converted to the display's primaries
+ * from its EDID, instead of letting the display stretch them over its whole
+ * gamut */
+gboolean
+meta_output_kms_wants_sdr_colors_mapped (MetaOutput *output)
+{
+  static const double bt709[6] = { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06 };
+  static int enabled = -1;
+  int i;
+
+  if (enabled < 0)
+    enabled = g_strcmp0 (g_getenv ("MUFFIN_SDR_EDID_COLORS"), "1") == 0;
+
+  if (!enabled ||
+      output->color_mode == META_OUTPUT_COLOR_MODE_BT2100 ||
+      !output->has_edid_primaries)
+    return FALSE;
+
+  /* A display with (about) BT.709 primaries needs no conversion */
+  for (i = 0; i < 6; i++)
+    {
+      if (fabs (output->edid_primaries[i] - bt709[i]) > 0.01)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+/* Whether SDR colors are converted to the display's primaries by its CRTC's
+ * color pipeline, so the view needs no offscreen framebuffer and can be
+ * scanned out directly; MUFFIN_DEBUG_SDR_COLORS_SHADER=1 converts them in
+ * the view as before, for comparisons */
+gboolean
+meta_output_kms_maps_sdr_colors_in_hardware (MetaOutput *output)
+{
+  static int use_shader = -1;
+  MetaCrtc *crtc;
+
+  if (use_shader < 0)
+    use_shader = g_strcmp0 (g_getenv ("MUFFIN_DEBUG_SDR_COLORS_SHADER"), "1") == 0;
+
+  if (use_shader || !meta_output_kms_wants_sdr_colors_mapped (output))
+    return FALSE;
+
+  crtc = meta_output_get_assigned_crtc (output);
+  return crtc &&
+         meta_kms_crtc_supports_color_pipeline (meta_crtc_kms_get_kms_crtc (crtc));
+}
+
 void
 meta_output_kms_set_color_properties (MetaOutput    *output,
                                       MetaKmsUpdate *kms_update)
@@ -202,10 +254,30 @@ meta_output_kms_set_color_properties (MetaOutput    *output,
       g_autofree uint16_t *blue = NULL;
       int size;
 
+      gboolean sdr_in_hardware =
+        meta_output_kms_maps_sdr_colors_in_hardware (output);
+
+      if (sdr_in_hardware)
+        {
+          float to_display[9];
+
+          meta_color_transform_get_bt709_to_display (output->edid_primaries,
+                                                     to_display);
+          meta_kms_crtc_set_sdr_to_display (kms_crtc, to_display);
+        }
+      else
+        {
+          meta_kms_crtc_set_sdr_to_display (kms_crtc, NULL);
+        }
+
+      /* A gamma update also programs (or clears) the color pipeline */
       if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
         meta_kms_crtc_set_neutral_gamma (kms_crtc, kms_update);
       else if (meta_output_kms_get_gamma (output, &size, &red, &green, &blue))
         meta_kms_crtc_set_gamma (kms_crtc, kms_update, size, red, green, blue);
+      else if (sdr_in_hardware ||
+               meta_kms_crtc_is_color_pipeline_programmed (kms_crtc))
+        meta_kms_crtc_set_neutral_gamma (kms_crtc, kms_update);
     }
 
   if (output->supported_color_formats & (1 << output->color_format))
