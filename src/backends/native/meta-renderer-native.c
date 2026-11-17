@@ -65,6 +65,8 @@
 #include "backends/native/meta-drm-buffer-import.h"
 #include "backends/native/meta-drm-buffer.h"
 #include "backends/native/meta-gpu-kms.h"
+#include "backends/native/meta-kms-connector.h"
+#include "backends/native/meta-kms-device.h"
 #include "backends/native/meta-kms-update.h"
 #include "backends/native/meta-kms-utils.h"
 #include "backends/native/meta-kms.h"
@@ -4788,6 +4790,114 @@ meta_renderer_native_reset_modes (MetaRendererNative *renderer_native)
     post_pending_update (kms);
 }
 
+/* What a GPU's connected monitors show: whether one is a built-in panel, and
+ * the pixels per second of their preferred modes. Monitors on another GPU
+ * than the primary one get each frame copied over, so the one that shows the
+ * most is the one with the least to copy. */
+static double
+get_gpu_display_load (MetaGpuKms *gpu_kms,
+                      gboolean   *has_builtin_panel)
+{
+  MetaKmsDevice *kms_device = meta_gpu_kms_get_kms_device (gpu_kms);
+  double load = 0.0;
+  GList *l;
+
+  *has_builtin_panel = FALSE;
+
+  for (l = meta_kms_device_get_connectors (kms_device); l; l = l->next)
+    {
+      MetaKmsConnector *connector = l->data;
+      const MetaKmsConnectorState *state =
+        meta_kms_connector_get_current_state (connector);
+      const drmModeModeInfo *mode;
+      int i;
+
+      if (!state || state->n_modes == 0)
+        continue;
+
+      switch (meta_kms_connector_get_connector_type (connector))
+        {
+        case META_CONNECTOR_TYPE_eDP:
+        case META_CONNECTOR_TYPE_LVDS:
+        case META_CONNECTOR_TYPE_DSI:
+          *has_builtin_panel = TRUE;
+          break;
+        default:
+          break;
+        }
+
+      mode = &state->modes[0];
+      for (i = 0; i < state->n_modes; i++)
+        {
+          if (state->modes[i].type & DRM_MODE_TYPE_PREFERRED)
+            {
+              mode = &state->modes[i];
+              break;
+            }
+        }
+
+      if (mode->htotal && mode->vtotal)
+        load += mode->hdisplay * mode->vdisplay *
+                (mode->clock * 1000.0 / (mode->htotal * mode->vtotal));
+    }
+
+  return load;
+}
+
+/* The GPU the monitors are on: the one with the built-in panel (on a laptop,
+ * an external monitor on the discrete GPU must not keep that one awake), or
+ * else the one whose monitors show the most. NULL if no GPU stands out.
+ * This is preferred over the boot GPU, which is the one whose output the
+ * firmware or boot loader last drew on: a boot loader's graphical menu can
+ * make that the discrete GPU of a system set up to show everything on the
+ * integrated one and offload to the discrete one. */
+static MetaGpuKms *
+choose_gpu_with_monitors (MetaRendererNative *renderer_native,
+                          GList              *gpus)
+{
+  MetaGpuKms *builtin_gpu = NULL;
+  MetaGpuKms *best_gpu = NULL;
+  double best_load = 0.0;
+  gboolean tie = FALSE;
+  int n_builtin = 0;
+  GList *l;
+
+  for (l = gpus; l; l = l->next)
+    {
+      MetaGpuKms *gpu_kms = META_GPU_KMS (l->data);
+      gboolean has_builtin_panel;
+      double load;
+
+      if (!gpu_kms_can_be_primary (renderer_native, gpu_kms))
+        continue;
+
+      load = get_gpu_display_load (gpu_kms, &has_builtin_panel);
+      if (has_builtin_panel)
+        {
+          builtin_gpu = gpu_kms;
+          n_builtin++;
+        }
+
+      if (load > best_load)
+        {
+          best_gpu = gpu_kms;
+          best_load = load;
+          tie = FALSE;
+        }
+      else if (load > 0.0 && load == best_load)
+        {
+          tie = TRUE;
+        }
+    }
+
+  if (n_builtin == 1)
+    return builtin_gpu;
+  if (n_builtin > 1 || tie)
+    return NULL;
+
+  return best_gpu;
+}
+
 static MetaGpuKms *
 choose_primary_gpu_unchecked (MetaBackend        *backend,
                               MetaRendererNative *renderer_native)
@@ -4821,6 +4931,15 @@ choose_primary_gpu_unchecked (MetaBackend        *backend,
         if (meta_gpu_kms_is_platform_device (gpu_kms) &&
             (allow_sw == 1 ||
              gpu_kms_can_be_primary (renderer_native, gpu_kms)))
+          return gpu_kms;
+      }
+
+    /* Then the GPU the monitors are on, when there are several GPUs */
+    if (allow_sw == 0 && g_list_length (gpus) > 1)
+      {
+        MetaGpuKms *gpu_kms = choose_gpu_with_monitors (renderer_native, gpus);
+
+        if (gpu_kms)
           return gpu_kms;
       }
 
