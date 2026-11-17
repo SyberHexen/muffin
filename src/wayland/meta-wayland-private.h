@@ -89,6 +89,14 @@ struct _MetaWaylandCompositor
   gboolean frame_callbacks_held;
   guint held_frame_callbacks_idle_id;
 
+  /* wp_presentation */
+  struct {
+    /* Surfaces with feedbacks waiting for their content to be drawn */
+    GList *feedback_surfaces;
+    /* Feedbacks drawn, waiting for their view's frame */
+    struct wl_list in_flight;
+  } presentation_time;
+
   MetaXWaylandManager xwayland_manager;
 
   MetaWaylandSeat *seat;
