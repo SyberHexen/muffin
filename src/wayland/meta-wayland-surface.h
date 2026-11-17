@@ -200,6 +200,9 @@ struct _MetaWaylandSurface
   /* wp_linux_drm_syncobj_v1 */
   MetaWaylandSyncobjSurface *drm_syncobj;
 
+  /* A buffer was committed and not drawn yet (frame callbacks wait) */
+  gboolean frame_undrawn;
+
   /* wp_color_management_v1 */
   struct {
     struct wl_resource *resource;
