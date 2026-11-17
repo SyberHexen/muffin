@@ -72,6 +72,9 @@ typedef struct _ClutterStageViewPrivate
   cairo_region_t *redraw_clip;
 
   gboolean painted;
+  /* Damage for the view was queued on the stage and isn't in its redraw
+   * clip yet */
+  gboolean redraw_wanted;
 
   guint dirty_viewport   : 1;
   guint dirty_projection : 1;
@@ -952,10 +955,23 @@ clutter_stage_view_was_painted (ClutterStageView *view)
   return priv->painted;
 }
 
+void
+clutter_stage_view_set_redraw_wanted (ClutterStageView *view,
+                                      gboolean          redraw_wanted)
+{
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  priv->redraw_wanted = redraw_wanted;
+}
+
 gboolean
 clutter_stage_view_has_queued_redraw (ClutterStageView *view)
 {
-  return clutter_stage_view_has_redraw_clip (view);
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  return priv->has_redraw_clip || priv->redraw_wanted;
 }
 
 gboolean

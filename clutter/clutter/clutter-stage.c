@@ -160,6 +160,8 @@ struct _ClutterStagePrivate
   GHashTable *touch_sequences;
 
   guint redraw_pending         : 1;
+  /* redraw_pending is only kept for views waiting for their own time */
+  guint redraw_pending_for_views : 1;
   guint is_cursor_visible      : 1;
   guint throttle_motion_events : 1;
   guint use_alpha              : 1;
@@ -1343,6 +1345,28 @@ _clutter_stage_needs_update (ClutterStage *stage)
           priv->pending_relayouts != NULL);
 }
 
+/*
+ * _clutter_stage_needs_stage_update:
+ * @stage: A #ClutterStage
+ *
+ * Like _clutter_stage_needs_update(), but not for damage that only waits
+ * for its views' own time: that is drawn when the view is due, without a
+ * stage update of its own.
+ */
+gboolean
+_clutter_stage_needs_stage_update (ClutterStage *stage)
+{
+  ClutterStagePrivate *priv;
+
+  g_return_val_if_fail (CLUTTER_IS_STAGE (stage), FALSE);
+
+  priv = stage->priv;
+
+  return ((priv->redraw_pending && !priv->redraw_pending_for_views) ||
+          priv->needs_update ||
+          priv->pending_relayouts != NULL);
+}
+
 void
 clutter_stage_queue_actor_relayout (ClutterStage *stage,
                                     ClutterActor *actor)
@@ -1713,11 +1737,16 @@ _clutter_stage_do_update (ClutterStage *stage)
 
   /* reset the guard, so that new redraws are possible */
   priv->redraw_pending = FALSE;
+  priv->redraw_pending_for_views = FALSE;
 
   /* Each monitor is drawn on its own refresh cycle: one that wasn't due
-   * yet keeps its damage, and the stage stays queued for it */
+   * yet keeps its damage, and the stage stays queued for it (without
+   * asking for a stage update: the view is drawn when it's due) */
   if (stage_has_view_redraw_clips (stage))
-    priv->redraw_pending = TRUE;
+    {
+      priv->redraw_pending = TRUE;
+      priv->redraw_pending_for_views = TRUE;
+    }
 
 #ifdef CLUTTER_ENABLE_DEBUG
   if (priv->redraw_count > 0)
@@ -3618,10 +3647,11 @@ clutter_stage_ensure_redraw (ClutterStage *stage)
 
   priv = stage->priv;
 
-  if (!_clutter_stage_needs_update (stage))
+  if (!_clutter_stage_needs_stage_update (stage))
     clutter_stage_schedule_update (stage);
 
   priv->redraw_pending = TRUE;
+  priv->redraw_pending_for_views = FALSE;
 
   master_clock = _clutter_master_clock_get_default ();
   _clutter_master_clock_start_running (master_clock);
@@ -4044,7 +4074,16 @@ _clutter_stage_queue_actor_redraw (ClutterStage                 *stage,
    */
   priv->cached_pick_mode = CLUTTER_PICK_NONE;
 
-  if (!priv->redraw_pending)
+  /* The monitors the actor is on want a frame: the stage update that hands
+   * them the damage is timed by them, not by the fastest monitor */
+  {
+    GList *l;
+
+    for (l = clutter_actor_peek_stage_views (actor); l; l = l->next)
+      clutter_stage_view_set_redraw_wanted (l->data, TRUE);
+  }
+
+  if (!priv->redraw_pending || priv->redraw_pending_for_views)
     {
       ClutterMasterClock *master_clock;
 
@@ -4052,6 +4091,7 @@ _clutter_stage_queue_actor_redraw (ClutterStage                 *stage,
 
       clutter_stage_schedule_update (stage);
       priv->redraw_pending = TRUE;
+      priv->redraw_pending_for_views = FALSE;
 
       master_clock = _clutter_master_clock_get_default ();
       _clutter_master_clock_start_running (master_clock);
@@ -4176,6 +4216,14 @@ clutter_stage_maybe_finish_queue_redraws (ClutterStage *stage)
         }
       g_list_free (stolen_list);
     }
+
+  /* The damage is in the views' redraw clips now */
+  {
+    GList *l;
+
+    for (l = clutter_stage_peek_stage_views (stage); l; l = l->next)
+      clutter_stage_view_set_redraw_wanted (l->data, FALSE);
+  }
 }
 
 /**

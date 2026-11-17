@@ -64,6 +64,7 @@ void                _clutter_stage_maybe_setup_viewport  (ClutterStage          
                                                           ClutterStageView      *view);
 void                _clutter_stage_maybe_relayout        (ClutterActor          *stage);
 gboolean            _clutter_stage_needs_update          (ClutterStage          *stage);
+gboolean            _clutter_stage_needs_stage_update    (ClutterStage          *stage);
 gboolean            _clutter_stage_do_update             (ClutterStage          *stage);
 
 CLUTTER_EXPORT

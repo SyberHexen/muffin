@@ -53,6 +53,10 @@ gboolean clutter_stage_view_has_redraw_clip (ClutterStageView *view);
 void clutter_stage_view_set_painted (ClutterStageView *view,
                                      gboolean          painted);
 
+/* Damage for the view was queued on the stage (not in its clip yet) */
+void clutter_stage_view_set_redraw_wanted (ClutterStageView *view,
+                                           gboolean          redraw_wanted);
+
 const cairo_region_t * clutter_stage_view_peek_redraw_clip (ClutterStageView *view);
 
 cairo_region_t * clutter_stage_view_take_redraw_clip (ClutterStageView *view);
