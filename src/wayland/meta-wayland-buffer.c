@@ -87,6 +87,8 @@ meta_wayland_buffer_destroy_handler (struct wl_listener *listener,
     wl_container_of (listener, buffer, destroy_listener);
 
   buffer->resource = NULL;
+  /* The client no longer waits for it */
+  meta_wayland_buffer_signal_release_points (buffer);
   g_signal_emit (buffer, signals[RESOURCE_DESTROYED], 0);
   g_object_unref (buffer);
 }
@@ -752,10 +754,35 @@ meta_wayland_buffer_try_acquire_scanout (MetaWaylandBuffer *buffer,
   return NULL;
 }
 
+void
+meta_wayland_buffer_add_release_point (MetaWaylandBuffer    *buffer,
+                                       MetaWaylandSyncPoint *release_point)
+{
+  if (!buffer->release_points)
+    buffer->release_points = g_ptr_array_new ();
+  g_ptr_array_add (buffer->release_points, release_point);
+}
+
+void
+meta_wayland_buffer_signal_release_points (MetaWaylandBuffer *buffer)
+{
+  g_autoptr (GPtrArray) release_points = NULL;
+  unsigned int i;
+
+  release_points = g_steal_pointer (&buffer->release_points);
+  if (!release_points)
+    return;
+
+  for (i = 0; i < release_points->len; i++)
+    meta_wayland_sync_point_release (release_points->pdata[i], buffer);
+}
+
 static void
 meta_wayland_buffer_finalize (GObject *object)
 {
   MetaWaylandBuffer *buffer = META_WAYLAND_BUFFER (object);
+
+  meta_wayland_buffer_signal_release_points (buffer);
 
   g_clear_pointer (&buffer->egl_image.texture, cogl_object_unref);
 #ifdef HAVE_WAYLAND_EGLSTREAM

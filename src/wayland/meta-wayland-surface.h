@@ -32,6 +32,7 @@
 #include "meta/meta-cursor-tracker.h"
 #include "wayland/meta-wayland-pointer-constraints.h"
 #include "wayland/meta-wayland-types.h"
+#include "wayland/meta-wayland-linux-drm-syncobj.h"
 
 #define META_TYPE_WAYLAND_SURFACE (meta_wayland_surface_get_type ())
 G_DECLARE_FINAL_TYPE (MetaWaylandSurface,
@@ -191,6 +192,9 @@ struct _MetaWaylandSurface
     /* Last preferred_scale sent; exact, 0.0 if none or if the object died. */
     double sent_scale;
   } fractional_scale;
+
+  /* wp_linux_drm_syncobj_v1 */
+  MetaWaylandSyncobjSurface *drm_syncobj;
 
   /* Buffer renderer state. */
   gboolean buffer_held;
