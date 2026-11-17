@@ -29,6 +29,9 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (MetaWindowXwayland, meta_window_xwayland,
                       META, WINDOW_XWAYLAND, MetaWindowX11)
 
+gboolean meta_window_xwayland_handle_damage_notify (MetaX11Display *x11_display,
+                                                    XEvent         *xevent);
+
 G_END_DECLS
 
 #endif

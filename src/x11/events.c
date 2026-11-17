@@ -50,6 +50,7 @@
 #include "x11/xprops.h"
 
 #ifdef HAVE_WAYLAND
+#include "wayland/meta-window-xwayland.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-xwayland-private.h"
 #include "wayland/meta-xwayland.h"
@@ -1863,6 +1864,19 @@ meta_x11_display_handle_xevent (MetaX11Display *x11_display,
       bypass_gtk = bypass_compositor = TRUE;
       goto out;
     }
+
+#ifdef HAVE_WAYLAND
+  /* An Xwayland window waiting for its client to draw after it was
+   * unminimized */
+  if (meta_is_wayland_compositor () &&
+      META_X11_DISPLAY_HAS_DAMAGE (x11_display) &&
+      event->type == x11_display->damage_event_base + XDamageNotify &&
+      meta_window_xwayland_handle_damage_notify (x11_display, event))
+    {
+      bypass_gtk = bypass_compositor = TRUE;
+      goto out;
+    }
+#endif
 
   if (handle_other_xevent (x11_display, event))
     {
