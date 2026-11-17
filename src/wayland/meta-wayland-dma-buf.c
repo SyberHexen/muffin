@@ -95,6 +95,12 @@ struct _MetaWaylandDmaBufBuffer
   CoglTexture *yuv_planes[2];
   CoglFramebuffer *yuv_framebuffer;
   CoglPipeline *yuv_pipeline;
+  /* The coefficients (luma weights) and range the client gave
+   * (wp_color_representation_v1), if any */
+  gboolean has_yuv_conversion;
+  float yuv_kr;
+  float yuv_kb;
+  gboolean yuv_full_range;
 };
 
 G_DEFINE_TYPE (MetaWaylandDmaBufBuffer, meta_wayland_dma_buf_buffer, G_TYPE_OBJECT);
@@ -477,21 +483,58 @@ static void
 convert_yuv_texture (MetaWaylandBuffer *buffer)
 {
   MetaWaylandDmaBufBuffer *dma_buf = buffer->dma_buf.dma_buf;
-  /* BT.709 for 8 bit video, BT.2020 for 10 bit (HDR) video, limited range,
-   * as video usually is */
+  /* Unless the client says otherwise: BT.709 for 8 bit video, BT.2020 for
+   * 10 bit (HDR) video, limited range, as video usually is */
   gboolean is_p010 = dma_buf->drm_format == DRM_FORMAT_P010;
   float kr = is_p010 ? 0.2627f : 0.2126f;
   float kb = is_p010 ? 0.0593f : 0.0722f;
+  gboolean full_range = FALSE;
   const float coords[8] = { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f };
 
+  if (dma_buf->has_yuv_conversion)
+    {
+      kr = dma_buf->yuv_kr;
+      kb = dma_buf->yuv_kb;
+      full_range = dma_buf->yuv_full_range;
+    }
+
   set_yuv_conversion (dma_buf->yuv_pipeline, dma_buf->drm_format,
-                      FALSE, kr, kb);
+                      full_range, kr, kb);
   cogl_framebuffer_draw_multitextured_rectangle (dma_buf->yuv_framebuffer,
                                                  dma_buf->yuv_pipeline,
                                                  0, 0,
                                                  dma_buf->width,
                                                  dma_buf->height,
                                                  coords, 8);
+}
+
+gboolean
+meta_wayland_dma_buf_buffer_is_yuv (MetaWaylandBuffer *buffer)
+{
+  MetaWaylandDmaBufBuffer *dma_buf = meta_wayland_dma_buf_from_buffer (buffer);
+
+  return dma_buf && drm_format_is_yuv (dma_buf->drm_format);
+}
+
+/* The coefficients (luma weights kr and kb) and range to convert a YUV
+ * buffer with the next time it's attached; with has_conversion FALSE, the
+ * defaults for its format */
+void
+meta_wayland_dma_buf_buffer_set_yuv_conversion (MetaWaylandBuffer *buffer,
+                                                gboolean           has_conversion,
+                                                float              kr,
+                                                float              kb,
+                                                gboolean           full_range)
+{
+  MetaWaylandDmaBufBuffer *dma_buf = meta_wayland_dma_buf_from_buffer (buffer);
+
+  if (!dma_buf)
+    return;
+
+  dma_buf->has_yuv_conversion = has_conversion;
+  dma_buf->yuv_kr = kr;
+  dma_buf->yuv_kb = kb;
+  dma_buf->yuv_full_range = full_range;
 }
 
 static gboolean
