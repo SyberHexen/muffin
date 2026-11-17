@@ -3758,6 +3758,18 @@ meta_output_parse_edid (MetaOutput *output,
 
       decode_edid_hdr_static_metadata (g_bytes_get_data (edid, &len), len,
                                        &hdr);
+
+      /* HDR10 needs a display that takes the SMPTE ST 2084 (PQ) transfer
+       * function, as its HDR static metadata block says: one that doesn't
+       * shows the signal washed out */
+      if (!(hdr.eotfs & 0x4))
+        {
+          output->supported_color_modes &=
+            ~(1u << META_OUTPUT_COLOR_MODE_BT2100);
+          if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
+            output->color_mode = META_OUTPUT_COLOR_MODE_DEFAULT;
+        }
+
       output->edid_max_luminance = hdr.max_luminance;
       output->edid_max_frame_avg = hdr.max_frame_avg;
       output->edid_min_luminance = hdr.min_luminance;
