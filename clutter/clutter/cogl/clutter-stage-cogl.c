@@ -55,6 +55,14 @@ typedef struct _ClutterStageViewCoglPrivate
   /* Damage history, in stage view render target framebuffer coordinate space.
    */
   ClutterDamageHistory *damage_history;
+
+  /* The view's own frame timing: each monitor is drawn on its own refresh
+   * cycle, timed by its last frame shown */
+  float refresh_rate;
+  int64_t last_presentation_time;
+  int64_t update_time;
+  int64_t last_update_time;
+  int64_t next_presentation_time;
 } ClutterStageViewCoglPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (ClutterStageViewCogl, clutter_stage_view_cogl,
@@ -87,27 +95,128 @@ clutter_stage_cogl_unrealize (ClutterStageWindow *stage_window)
   CLUTTER_NOTE (BACKEND, "Unrealizing Cogl stage [%p]", stage_window);
 }
 
-void
-_clutter_stage_cogl_presented (ClutterStageCogl *stage_cogl,
-                               CoglFrameEvent    frame_event,
-                               ClutterFrameInfo *frame_info)
-{
+/* Views due within this much of each other are drawn together (monitors
+ * with the same refresh rate and phase) */
+#define VIEW_DUE_SLACK_US 1000
 
-  if (frame_event == COGL_FRAME_EVENT_SYNC)
+static ClutterStageViewCoglPrivate *
+view_timing (ClutterStageView *view)
+{
+  if (!CLUTTER_IS_STAGE_VIEW_COGL (view))
+    return NULL;
+
+  return clutter_stage_view_cogl_get_instance_private (CLUTTER_STAGE_VIEW_COGL (view));
+}
+
+/* When to start drawing a frame for a monitor refreshing at @refresh_rate
+ * that last showed a frame at @last_presentation_time, for it to be shown
+ * at the monitor's next refresh (returned in @next_presentation_time_out;
+ * -1 if unknown) */
+static int64_t
+compute_update_time (float     refresh_rate,
+                     int64_t   last_presentation_time,
+                     int64_t   last_update_time,
+                     int       sync_delay,
+                     int64_t   now,
+                     int64_t  *next_presentation_time_out)
+{
+  int64_t refresh_interval;
+  int64_t min_render_time_allowed;
+  int64_t max_render_time_allowed;
+  int64_t next_presentation_time;
+  int64_t update_time;
+
+  *next_presentation_time_out = -1;
+
+  if (refresh_rate <= 0.0)
+    refresh_rate = clutter_get_default_frame_rate ();
+
+  refresh_interval = (int64_t) (0.5 + G_USEC_PER_SEC / refresh_rate);
+  if (refresh_interval == 0)
+    return now;
+
+  min_render_time_allowed = refresh_interval / 2;
+  max_render_time_allowed = refresh_interval - 1000 * MAX (sync_delay, 0);
+
+  /* Be robust in the case of incredibly bogus refresh rate */
+  if (max_render_time_allowed <= 0)
     {
-      /* Early versions of the swap_event implementation in Mesa
-       * deliver BufferSwapComplete event when not selected for,
-       * so if we get a swap event we aren't expecting, just ignore it.
-       *
-       * https://bugs.freedesktop.org/show_bug.cgi?id=27962
-       *
-       * FIXME: This issue can be hidden inside Cogl so we shouldn't
-       * need to care about this bug here.
-       */
-      if (stage_cogl->pending_swaps > 0)
-        stage_cogl->pending_swaps--;
+      g_warning ("Unsupported monitor refresh rate detected. "
+                 "(Refresh rate: %.3f, refresh interval: %" G_GINT64_FORMAT ")",
+                 refresh_rate,
+                 refresh_interval);
+      return now;
     }
-  else if (frame_event == COGL_FRAME_EVENT_COMPLETE)
+
+  if (min_render_time_allowed > max_render_time_allowed)
+    min_render_time_allowed = max_render_time_allowed;
+
+  next_presentation_time = last_presentation_time + refresh_interval;
+
+  /* Get next_presentation_time closer to its final value, to reduce
+   * the number of while iterations below.
+   */
+  if (next_presentation_time < now)
+    {
+      int64_t last_virtual_presentation_time = now - now % refresh_interval;
+      int64_t hardware_clock_phase =
+        last_presentation_time % refresh_interval;
+
+      next_presentation_time =
+        last_virtual_presentation_time + hardware_clock_phase;
+    }
+
+  while (next_presentation_time < now + min_render_time_allowed)
+    next_presentation_time += refresh_interval;
+
+  update_time = next_presentation_time - max_render_time_allowed;
+
+  if (update_time == last_update_time)
+    {
+      update_time += refresh_interval;
+      next_presentation_time += refresh_interval;
+    }
+
+  *next_presentation_time_out = next_presentation_time;
+  return update_time;
+}
+
+/* Gives a view the time of its next frame, on its own monitor's refresh
+ * cycle, unless it has one */
+static void
+view_schedule_update (ClutterStageCogl *stage_cogl,
+                      ClutterStageView *view,
+                      int64_t           now)
+{
+  ClutterStageViewCoglPrivate *view_priv = view_timing (view);
+
+  if (!view_priv || view_priv->update_time != -1)
+    return;
+
+  view_priv->update_time =
+    compute_update_time (view_priv->refresh_rate,
+                         view_priv->last_presentation_time,
+                         view_priv->last_update_time,
+                         stage_cogl->last_sync_delay,
+                         now,
+                         &view_priv->next_presentation_time);
+}
+
+/**
+ * _clutter_stage_cogl_view_presented: (skip)
+ *
+ * A frame event of @view's monitor: its frame was handed over (SYNC) or
+ * shown (COMPLETE). The view's next frames are timed from it.
+ */
+void
+_clutter_stage_cogl_view_presented (ClutterStageCogl *stage_cogl,
+                                    ClutterStageView *view,
+                                    CoglFrameEvent    frame_event,
+                                    ClutterFrameInfo *frame_info)
+{
+  ClutterStageViewCoglPrivate *view_priv = view ? view_timing (view) : NULL;
+
+  if (frame_event == COGL_FRAME_EVENT_COMPLETE && view_priv)
     {
       gint64 presentation_time_cogl = frame_info->presentation_time;
 
@@ -118,24 +227,33 @@ _clutter_stage_cogl_presented (ClutterStageCogl *stage_cogl,
           gint64 current_time_cogl = cogl_get_clock_time (context);
           gint64 now = g_get_monotonic_time ();
 
-          stage_cogl->last_presentation_time =
+          view_priv->last_presentation_time =
             now + (presentation_time_cogl - current_time_cogl) / 1000;
         }
 
-      stage_cogl->refresh_rate = frame_info->refresh_rate;
+      view_priv->refresh_rate = frame_info->refresh_rate;
+
+      /* A stage update timed by the monitors' old rhythm is timed again */
+      if (!stage_cogl->update_immediately)
+        stage_cogl->update_time = -1;
     }
 
   _clutter_stage_presented (stage_cogl->wrapper, frame_event, frame_info);
+}
 
-  if (frame_event == COGL_FRAME_EVENT_COMPLETE &&
-      stage_cogl->update_time != -1)
-    {
-      ClutterStageWindow *stage_window = CLUTTER_STAGE_WINDOW (stage_cogl);
+/* A frame event without its view (a stage with a single one) */
+void
+_clutter_stage_cogl_presented (ClutterStageCogl *stage_cogl,
+                               CoglFrameEvent    frame_event,
+                               ClutterFrameInfo *frame_info)
+{
+  GList *views =
+    _clutter_stage_window_get_views (CLUTTER_STAGE_WINDOW (stage_cogl));
 
-      stage_cogl->update_time = -1;
-      clutter_stage_cogl_schedule_update (stage_window,
-                                          stage_cogl->last_sync_delay);
-    }
+  _clutter_stage_cogl_view_presented (stage_cogl,
+                                      views ? views->data : NULL,
+                                      frame_event,
+                                      frame_info);
 }
 
 static gboolean
@@ -163,92 +281,142 @@ clutter_stage_cogl_schedule_update (ClutterStageWindow *stage_window,
                                     gint                sync_delay)
 {
   ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_window);
-  gint64 now;
-  float refresh_rate;
-  gint64 refresh_interval;
-  int64_t min_render_time_allowed;
-  int64_t max_render_time_allowed;
-  int64_t next_presentation_time;
 
   if (stage_cogl->update_time != -1)
     return;
 
-  stage_cogl->last_sync_delay = sync_delay;
-
-  now = g_get_monotonic_time ();
-
   if (sync_delay < 0)
     {
-      stage_cogl->update_time = now;
+      stage_cogl->update_immediately = TRUE;
+      stage_cogl->update_time = g_get_monotonic_time ();
       return;
     }
 
-  refresh_rate = stage_cogl->refresh_rate;
-  if (refresh_rate <= 0.0)
-    refresh_rate = clutter_get_default_frame_rate ();
+  stage_cogl->last_sync_delay = sync_delay;
 
-  refresh_interval = (gint64) (0.5 + G_USEC_PER_SEC / refresh_rate);
-  if (refresh_interval == 0)
-    {
-      stage_cogl->update_time = now;
-      return;
-    }
-
-  min_render_time_allowed = refresh_interval / 2;
-  max_render_time_allowed = refresh_interval - 1000 * sync_delay;
-
-  /* Be robust in the case of incredibly bogus refresh rate */
-  if (max_render_time_allowed <= 0)
-    {
-      g_warning ("Unsupported monitor refresh rate detected. "
-                 "(Refresh rate: %.3f, refresh interval: %" G_GINT64_FORMAT ")",
-                 refresh_rate,
-                 refresh_interval);
-      stage_cogl->update_time = now;
-      return;
-    }
-
-  if (min_render_time_allowed > max_render_time_allowed)
-    min_render_time_allowed = max_render_time_allowed;
-
-  next_presentation_time = stage_cogl->last_presentation_time + refresh_interval;
-
-  /* Get next_presentation_time closer to its final value, to reduce
-   * the number of while iterations below.
-   */
-  if (next_presentation_time < now)
-    {
-      int64_t last_virtual_presentation_time = now - now % refresh_interval;
-      int64_t hardware_clock_phase =
-        stage_cogl->last_presentation_time % refresh_interval;
-
-      next_presentation_time =
-        last_virtual_presentation_time + hardware_clock_phase;
-    }
-
-  while (next_presentation_time < now + min_render_time_allowed)
-    next_presentation_time += refresh_interval;
-
-  stage_cogl->update_time = next_presentation_time - max_render_time_allowed;
-
-  if (stage_cogl->update_time == stage_cogl->last_update_time)
-    {
-      stage_cogl->update_time += refresh_interval;
-      next_presentation_time += refresh_interval;
-    }
-
-  stage_cogl->next_presentation_time = next_presentation_time;
+  /* The stage update is timed when it's asked for (in get_update_time),
+   * by the monitors that can take a frame then */
+  stage_cogl->update_wanted = TRUE;
 }
 
+/* Times a stage update that no view's damage times (an animation's next
+ * step, a relayout, events): by the fastest monitor that can take a frame,
+ * so animations advance at its rate. None while every monitor waits for
+ * its last frame to be shown. */
+static void
+ensure_stage_update_time (ClutterStageCogl *stage_cogl,
+                          int64_t           now)
+{
+  ClutterStageView *fastest = NULL;
+  ClutterStageViewCoglPrivate *fastest_priv = NULL;
+  GList *views, *l;
+
+  if (!stage_cogl->update_wanted || stage_cogl->update_time != -1)
+    return;
+
+  views = _clutter_stage_window_get_views (CLUTTER_STAGE_WINDOW (stage_cogl));
+  for (l = views; l; l = l->next)
+    {
+      ClutterStageView *view = l->data;
+      ClutterStageViewCoglPrivate *view_priv = view_timing (view);
+
+      if (clutter_stage_view_has_pending_frame (view))
+        continue;
+
+      if (!fastest ||
+          (view_priv &&
+           (!fastest_priv || view_priv->refresh_rate > fastest_priv->refresh_rate)))
+        {
+          fastest = view;
+          fastest_priv = view_priv;
+        }
+    }
+
+  if (views && !fastest)
+    return;
+
+  stage_cogl->update_time =
+    compute_update_time (fastest_priv ? fastest_priv->refresh_rate : 0.0,
+                         fastest_priv ? fastest_priv->last_presentation_time : 0,
+                         stage_cogl->last_update_time,
+                         stage_cogl->last_sync_delay,
+                         now,
+                         &stage_cogl->next_presentation_time);
+}
+
+/* Each monitor (view) is drawn on its own refresh cycle: the stage is
+ * updated at the earliest time a view with damage is due, or a stage
+ * update is. A view waiting for its last frame to be shown isn't drawn
+ * (that would wait for its page flip and hold back the others); it gets
+ * its time once the frame is shown. */
 static gint64
 clutter_stage_cogl_get_update_time (ClutterStageWindow *stage_window)
 {
   ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_window);
+  int64_t now = g_get_monotonic_time ();
+  int64_t earliest = -1;
+  int64_t earliest_presentation_time = -1;
+  gboolean any_free = FALSE;
+  GList *views, *l;
 
-  if (stage_cogl->pending_swaps)
-    return -1; /* in the future, indefinite */
+  views = _clutter_stage_window_get_views (stage_window);
+  for (l = views; l; l = l->next)
+    {
+      ClutterStageView *view = l->data;
+      ClutterStageViewCoglPrivate *view_priv = view_timing (view);
 
-  return stage_cogl->update_time;
+      if (clutter_stage_view_has_pending_frame (view))
+        continue;
+
+      any_free = TRUE;
+
+      if (!view_priv || !clutter_stage_view_has_redraw_clip (view))
+        continue;
+
+      /* Missed its time (something blocked): time it again */
+      if (view_priv->next_presentation_time > 0 &&
+          view_priv->next_presentation_time <= now)
+        view_priv->update_time = -1;
+
+      view_schedule_update (stage_cogl, view, now);
+
+      if (earliest == -1 || view_priv->update_time < earliest)
+        {
+          earliest = view_priv->update_time;
+          earliest_presentation_time = view_priv->next_presentation_time;
+        }
+    }
+
+  /* Every monitor waits for its last frame to be shown */
+  if (views && !any_free)
+    {
+      stage_cogl->earliest_presentation_time = -1;
+      return -1; /* in the future, indefinite */
+    }
+
+  if (!stage_cogl->update_immediately &&
+      stage_cogl->next_presentation_time > 0 &&
+      stage_cogl->next_presentation_time <= now)
+    {
+      CLUTTER_NOTE (BACKEND,
+                    "Missed some frames. Something blocked for over "
+                    "%" G_GINT64_FORMAT "ms.",
+                    (now - stage_cogl->next_presentation_time) / 1000);
+      stage_cogl->update_time = -1;
+    }
+
+  ensure_stage_update_time (stage_cogl, now);
+
+  if (stage_cogl->update_time != -1 &&
+      (earliest == -1 || stage_cogl->update_time < earliest))
+    {
+      earliest = stage_cogl->update_time;
+      earliest_presentation_time = stage_cogl->next_presentation_time;
+    }
+
+  stage_cogl->earliest_presentation_time = earliest_presentation_time;
+
+  return earliest;
 }
 
 static void
@@ -256,31 +424,24 @@ clutter_stage_cogl_clear_update_time (ClutterStageWindow *stage_window)
 {
   ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_window);
 
-  stage_cogl->last_update_time = stage_cogl->update_time;
+  if (stage_cogl->update_time != -1 &&
+      stage_cogl->update_time <= g_get_monotonic_time ())
+    stage_cogl->last_update_time = stage_cogl->update_time;
+
   stage_cogl->update_time = -1;
   stage_cogl->next_presentation_time = -1;
+  stage_cogl->update_wanted = FALSE;
+  stage_cogl->update_immediately = FALSE;
 }
 
 static int64_t
 clutter_stage_cogl_get_next_presentation_time (ClutterStageWindow *stage_window)
 {
   ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_window);
-  int64_t now = g_get_monotonic_time ();
 
-  if (stage_cogl->next_presentation_time > 0 &&
-      stage_cogl->next_presentation_time <= now)
-    {
-      CLUTTER_NOTE (BACKEND,
-                    "Missed some frames. Something blocked for over "
-                    "%" G_GINT64_FORMAT "ms.",
-                    (now - stage_cogl->next_presentation_time) / 1000);
+  clutter_stage_cogl_get_update_time (stage_window);
 
-      stage_cogl->update_time = -1;
-      clutter_stage_cogl_schedule_update (stage_window,
-                                          stage_cogl->last_sync_delay);
-    }
-
-  return stage_cogl->next_presentation_time;
+  return stage_cogl->earliest_presentation_time;
 }
 
 static ClutterActor *
@@ -807,12 +968,36 @@ clutter_stage_cogl_scanout_view (ClutterStageCogl *stage_cogl,
   cogl_onscreen_direct_scanout (onscreen, scanout);
 }
 
+/* Whether to draw @view in this stage update: it has damage, its monitor
+ * can take a frame (its last one was shown) and its time has come. A view
+ * not due keeps its damage for its own time. */
+static gboolean
+view_is_due (ClutterStageCogl *stage_cogl,
+             ClutterStageView *view,
+             int64_t           now)
+{
+  ClutterStageViewCoglPrivate *view_priv = view_timing (view);
+
+  if (!clutter_stage_view_has_redraw_clip (view))
+    return FALSE;
+
+  if (clutter_stage_view_has_pending_frame (view))
+    return FALSE;
+
+  if (!view_priv || stage_cogl->update_immediately)
+    return TRUE;
+
+  view_schedule_update (stage_cogl, view, now);
+
+  return view_priv->update_time <= now + VIEW_DUE_SLACK_US;
+}
+
 static void
 clutter_stage_cogl_redraw (ClutterStageWindow *stage_window)
 {
   ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_window);
-  gboolean has_redraw_clip = FALSE;
-  gboolean swap_event = FALSE;
+  int64_t now = g_get_monotonic_time ();
+  gboolean any_due = FALSE;
   GList *l;
 
   COGL_TRACE_BEGIN (ClutterStageCoglRedraw, "Paint (Cogl Redraw)");
@@ -820,54 +1005,47 @@ clutter_stage_cogl_redraw (ClutterStageWindow *stage_window)
   for (l = _clutter_stage_window_get_views (stage_window); l; l = l->next)
     {
       ClutterStageView *view = l->data;
+      gboolean due = view_is_due (stage_cogl, view, now);
 
-      if (!clutter_stage_view_has_redraw_clip (view))
-        continue;
-
-      has_redraw_clip = TRUE;
-      break;
+      clutter_stage_view_set_painted (view, due);
+      any_due |= due;
     }
 
-  if (has_redraw_clip)
+  if (any_due)
     clutter_stage_emit_before_paint (stage_cogl->wrapper);
 
   for (l = _clutter_stage_window_get_views (stage_window); l; l = l->next)
     {
       ClutterStageView *view = l->data;
+      ClutterStageViewCoglPrivate *view_priv = view_timing (view);
       g_autoptr (CoglScanout) scanout = NULL;
 
-      if (!clutter_stage_view_has_redraw_clip (view))
+      if (!clutter_stage_view_was_painted (view))
         continue;
+
+      if (view_priv)
+        {
+          view_priv->last_update_time =
+            view_priv->update_time != -1 && view_priv->update_time <= now ?
+            view_priv->update_time : now;
+          view_priv->update_time = -1;
+          view_priv->next_presentation_time = -1;
+        }
 
       scanout = clutter_stage_view_take_scanout (view);
       if (scanout)
-        {
-          clutter_stage_cogl_scanout_view (stage_cogl,
-                                           view,
-                                           scanout);
-          swap_event = TRUE;
-        }
+        clutter_stage_cogl_scanout_view (stage_cogl, view, scanout);
       else
-        {
-          swap_event |= clutter_stage_cogl_redraw_view (stage_window, view);
-        }
+        clutter_stage_cogl_redraw_view (stage_window, view);
     }
 
-  if (has_redraw_clip)
+  if (any_due)
     clutter_stage_emit_after_paint (stage_cogl->wrapper);
 
   _clutter_stage_window_finish_frame (stage_window);
 
-  if (swap_event)
-    {
-      /* If we have swap buffer events then cogl_onscreen_swap_buffers
-       * will return immediately and we need to track that there is a
-       * swap in progress... */
-      if (clutter_feature_available (CLUTTER_FEATURE_SWAP_EVENTS))
-        stage_cogl->pending_swaps++;
-    }
-
-  stage_cogl->frame_count++;
+  if (any_due)
+    stage_cogl->frame_count++;
 
   COGL_TRACE_END (ClutterStageCoglRedraw);
 }
@@ -926,11 +1104,9 @@ _clutter_stage_cogl_class_init (ClutterStageCoglClass *klass)
 static void
 _clutter_stage_cogl_init (ClutterStageCogl *stage)
 {
-  stage->last_presentation_time = 0;
-  stage->refresh_rate = 0.0;
-
   stage->update_time = -1;
   stage->next_presentation_time = -1;
+  stage->earliest_presentation_time = -1;
 }
 
 static void
@@ -952,6 +1128,8 @@ clutter_stage_view_cogl_init (ClutterStageViewCogl *view_cogl)
   clutter_stage_view_cogl_get_instance_private (view_cogl);
 
   view_priv->damage_history = clutter_damage_history_new ();
+  view_priv->update_time = -1;
+  view_priv->next_presentation_time = -1;
 }
 
 static void
