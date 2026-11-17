@@ -111,6 +111,10 @@ struct _MetaWaylandSurfaceState
   gboolean fifo_set_barrier;
   gboolean fifo_wait_barrier;
 
+  /* wp_commit_timer_v1: when to show the update, monotonic clock */
+  gboolean has_target_time;
+  int64_t target_time_us;
+
   MetaRectangle new_geometry;
   gboolean has_new_geometry;
 
@@ -210,6 +214,11 @@ struct _MetaWaylandSurface
     /* The update that set it changed what's on screen */
     gboolean barrier_needs_paint;
   } fifo;
+
+  /* wp_commit_timing_v1 */
+  struct {
+    struct wl_resource *resource;
+  } commit_timing;
 
   /* Content updates committed but not ready to be applied yet (waiting for
    * their constraints), oldest first */
