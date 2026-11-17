@@ -158,6 +158,11 @@ void                            clutter_timeline_advance                        
 CLUTTER_EXPORT
 guint                           clutter_timeline_get_elapsed_time               (ClutterTimeline          *timeline);
 CLUTTER_EXPORT
+void                            clutter_timeline_set_actor                      (ClutterTimeline          *timeline,
+                                                                                 ClutterActor             *actor);
+CLUTTER_EXPORT
+ClutterActor *                  clutter_timeline_get_actor                      (ClutterTimeline          *timeline);
+CLUTTER_EXPORT
 gdouble                         clutter_timeline_get_progress                   (ClutterTimeline          *timeline);
 CLUTTER_EXPORT
 gboolean                        clutter_timeline_is_playing                     (ClutterTimeline          *timeline);
