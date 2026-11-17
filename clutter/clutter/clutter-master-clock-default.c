@@ -288,9 +288,9 @@ master_clock_reschedule_stage_updates (ClutterMasterClockDefault *master_clock,
  *  number of millseconds before the we need to draw the next frame
  */
 /* The views the running animations are on: their ticks follow those
- * monitors rather than the fastest one. Animations of actors (transitions)
- * are on their actor's views; any other one, or an actor not on a view
- * yet, can be on any view. */
+ * monitors rather than the fastest one. Animations of actors (transitions,
+ * or timelines given their actor) are on their actor's views; any other
+ * one, or an actor not on a view yet, can be on any view. */
 static void
 master_clock_sync_tick_views (ClutterMasterClockDefault *master_clock)
 {
@@ -308,6 +308,10 @@ master_clock_sync_tick_views (ClutterMasterClockDefault *master_clock)
 
       if (CLUTTER_IS_TRANSITION (timeline))
         animatable = clutter_transition_get_animatable (CLUTTER_TRANSITION (timeline));
+
+      /* Otherwise, the actor the timeline was told it animates */
+      if (!animatable || !CLUTTER_IS_ACTOR (animatable))
+        animatable = (ClutterAnimatable *) clutter_timeline_get_actor (timeline);
 
       if (!animatable || !CLUTTER_IS_ACTOR (animatable) ||
           !clutter_actor_is_mapped (CLUTTER_ACTOR (animatable)))
