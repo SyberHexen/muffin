@@ -105,6 +105,10 @@ struct _MetaOutput
   gboolean is_underscanning;
   gboolean supports_underscanning;
 
+  /* Variable refresh rate: whether the sink can take it, and when to use it */
+  gboolean vrr_capable;
+  MetaOutputVrrMode vrr_mode;
+
   gpointer driver_private;
   GDestroyNotify driver_notify;
 

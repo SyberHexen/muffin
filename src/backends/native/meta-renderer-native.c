@@ -202,6 +202,9 @@ typedef struct _MetaOnscreenNative
   MetaOutput *output;
   MetaCrtc *crtc;
 
+  /* The VRR_ENABLED value last set on the CRTC: -1 if not set yet */
+  int vrr_enabled;
+
   MetaOnscreenNativeSecondaryGpuState *secondary_gpu_state;
 
   struct {
@@ -1499,6 +1502,69 @@ meta_onscreen_native_set_crtc_mode (CoglOnscreen              *onscreen,
   meta_output_kms_set_underscan (onscreen_native->output, kms_update);
 }
 
+/* Whether the output should vary its refresh rate now: always, or (in
+ * the automatic mode) while a window is fullscreen on its monitor, as games
+ * and video players are */
+static gboolean
+output_wants_vrr (MetaMonitorManager *monitor_manager,
+                  MetaOutput         *output)
+{
+  GList *l;
+
+  if (!output || !output->vrr_capable)
+    return FALSE;
+
+  switch (output->vrr_mode)
+    {
+    case META_OUTPUT_VRR_MODE_ALWAYS:
+      return TRUE;
+    case META_OUTPUT_VRR_MODE_AUTOMATIC:
+      break;
+    case META_OUTPUT_VRR_MODE_OFF:
+    default:
+      return FALSE;
+    }
+
+  for (l = meta_monitor_manager_get_monitors (monitor_manager); l; l = l->next)
+    {
+      MetaMonitor *monitor = l->data;
+      MetaLogicalMonitor *logical_monitor;
+
+      if (meta_monitor_get_main_output (monitor) != output)
+        continue;
+
+      logical_monitor = meta_monitor_get_logical_monitor (monitor);
+      return logical_monitor && logical_monitor->in_fullscreen;
+    }
+
+  return FALSE;
+}
+
+static void
+update_vrr (MetaOnscreenNative *onscreen_native,
+            MetaMonitorManager *monitor_manager,
+            MetaKmsUpdate      *kms_update)
+{
+  MetaKmsCrtc *kms_crtc;
+  uint32_t prop_id;
+  int wanted;
+
+  if (!onscreen_native->crtc)
+    return;
+
+  kms_crtc = meta_crtc_kms_get_kms_crtc (onscreen_native->crtc);
+  prop_id = meta_kms_crtc_get_vrr_enabled_prop_id (kms_crtc);
+  if (!prop_id)
+    return;
+
+  wanted = output_wants_vrr (monitor_manager, onscreen_native->output);
+  if (wanted == onscreen_native->vrr_enabled)
+    return;
+
+  meta_kms_update_set_crtc_property (kms_update, kms_crtc, prop_id, wanted);
+  onscreen_native->vrr_enabled = wanted;
+}
+
 static void
 meta_onscreen_native_flip_crtcs (CoglOnscreen  *onscreen,
                                  MetaKmsUpdate *kms_update)
@@ -1516,6 +1582,7 @@ meta_onscreen_native_flip_crtcs (CoglOnscreen  *onscreen,
 
   if (is_screen_shown (renderer_native, monitor_manager))
     {
+      update_vrr (onscreen_native, monitor_manager, kms_update);
       meta_onscreen_native_flip_crtc (onscreen, view, onscreen_native->crtc,
                                       kms_update);
     }
@@ -3254,6 +3321,7 @@ meta_renderer_native_create_onscreen (MetaRendererNative   *renderer_native,
   onscreen_native->render_gpu = render_gpu;
   onscreen_native->output = output;
   onscreen_native->crtc = crtc;
+  onscreen_native->vrr_enabled = -1;
 
   if (META_GPU_KMS (meta_crtc_get_gpu (crtc)) != render_gpu)
     {
