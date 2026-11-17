@@ -75,6 +75,7 @@ typedef struct _ClutterStageViewPrivate
   /* Damage for the view was queued on the stage and isn't in its redraw
    * clip yet */
   gboolean redraw_wanted;
+  gboolean tearing;
 
   guint dirty_viewport   : 1;
   guint dirty_projection : 1;
@@ -913,6 +914,25 @@ clutter_stage_view_was_painted (ClutterStageView *view)
     clutter_stage_view_get_instance_private (view);
 
   return priv->painted;
+}
+
+void
+clutter_stage_view_set_tearing (ClutterStageView *view,
+                                gboolean          tearing)
+{
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  priv->tearing = tearing;
+}
+
+gboolean
+clutter_stage_view_is_tearing (ClutterStageView *view)
+{
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  return priv->tearing;
 }
 
 void

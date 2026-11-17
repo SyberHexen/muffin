@@ -634,6 +634,23 @@ mode_set_fallback (MetaKmsImplSimple       *impl_simple,
 }
 
 static gboolean
+update_sets_mode_of_crtc (MetaKmsUpdate *update,
+                          MetaKmsCrtc   *crtc)
+{
+  GList *l;
+
+  for (l = meta_kms_update_get_mode_sets (update); l; l = l->next)
+    {
+      MetaKmsModeSet *mode_set = l->data;
+
+      if (mode_set->crtc == crtc)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static gboolean
 process_page_flip (MetaKmsImpl    *impl,
                    MetaKmsUpdate  *update,
                    gpointer        update_entry,
@@ -670,11 +687,31 @@ process_page_flip (MetaKmsImpl    *impl,
     }
   else
     {
+      /* A mode set goes with a flip at the vertical blank */
+      gboolean async = page_flip->async &&
+                       !update_sets_mode_of_crtc (update, crtc);
+      uint32_t flags = DRM_MODE_PAGE_FLIP_EVENT;
+
+      if (async)
+        flags |= DRM_MODE_PAGE_FLIP_ASYNC;
+
       ret = drmModePageFlip (fd,
                              meta_kms_crtc_get_id (crtc),
                              plane_assignment->fb_id,
-                             DRM_MODE_PAGE_FLIP_EVENT,
+                             flags,
                              meta_kms_page_flip_data_ref (page_flip_data));
+
+      /* The driver may not flip this buffer at once: flip it at the next
+       * vertical blank instead */
+      if (ret == -EINVAL && async)
+        {
+          meta_kms_page_flip_data_unref (page_flip_data);
+          ret = drmModePageFlip (fd,
+                                 meta_kms_crtc_get_id (crtc),
+                                 plane_assignment->fb_id,
+                                 DRM_MODE_PAGE_FLIP_EVENT,
+                                 meta_kms_page_flip_data_ref (page_flip_data));
+        }
     }
 
   if (ret != 0)
