@@ -226,13 +226,86 @@ meta_wayland_compositor_update (MetaWaylandCompositor *compositor,
     meta_wayland_seat_update (compositor->seat, event);
 }
 
+/* Whether a surface's frame callbacks are due, i.e. what it committed is
+ * on its way to the screen: a view it's on was just drawn, or is free with
+ * nothing left to draw. With monitors at different refresh rates, a surface
+ * on a busy monitor that this redraw didn't draw (a game on the faster
+ * monitor while the slower one redraws) would otherwise be told to draw its
+ * next frame before its last one was shown, and its frames would come
+ * unevenly. A view with something left to draw is redrawn once it's free,
+ * and the callbacks go out then. */
+static gboolean
+frame_callbacks_due (MetaWaylandSurface *surface,
+                     MetaSurfaceActor   *actor,
+                     gboolean            after_paint)
+{
+  GList *views = clutter_actor_peek_stage_views (CLUTTER_ACTOR (actor));
+  GList *l;
+
+  if (!views)
+    return TRUE;
+
+  for (l = views; l; l = l->next)
+    {
+      ClutterStageView *view = l->data;
+
+      if (after_paint && clutter_stage_view_was_painted (view))
+        return TRUE;
+
+      /* Between redraws, a buffer committed since the last one isn't on
+       * any view's redraw clip yet: wait for the redraw that draws it */
+      if (!clutter_stage_view_has_pending_frame (view) &&
+          !clutter_stage_view_has_queued_redraw (view) &&
+          (after_paint || !surface->frame_undrawn))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+static void emit_frame_callbacks (MetaWaylandCompositor *compositor,
+                                  gboolean               after_paint);
+
 void
 meta_wayland_compositor_paint_finished (MetaWaylandCompositor *compositor)
+{
+  emit_frame_callbacks (compositor, TRUE);
+}
+
+static gboolean
+emit_held_frame_callbacks (gpointer user_data)
+{
+  MetaWaylandCompositor *compositor = user_data;
+
+  compositor->held_frame_callbacks_idle_id = 0;
+  emit_frame_callbacks (compositor, FALSE);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* A view's frame completed: the callbacks held back for surfaces on it are
+ * due once its pending frame is cleared (right after this notification) */
+void
+meta_wayland_compositor_frame_completed (MetaWaylandCompositor *compositor)
+{
+  if (!compositor->frame_callbacks_held ||
+      compositor->held_frame_callbacks_idle_id)
+    return;
+
+  compositor->held_frame_callbacks_idle_id =
+    g_idle_add_full (G_PRIORITY_HIGH, emit_held_frame_callbacks,
+                     compositor, NULL);
+}
+
+static void
+emit_frame_callbacks (MetaWaylandCompositor *compositor,
+                      gboolean               after_paint)
 {
   GList *l;
   int64_t now_us;
 
   now_us = g_get_monotonic_time ();
+  compositor->frame_callbacks_held = FALSE;
 
   l = compositor->frame_callback_surfaces;
   while (l)
@@ -251,6 +324,15 @@ meta_wayland_compositor_paint_finished (MetaWaylandCompositor *compositor)
       if (!clutter_actor_has_mapped_clones (CLUTTER_ACTOR (actor)) &&
           meta_surface_actor_is_obscured (actor))
         continue;
+
+      if (!frame_callbacks_due (surface, actor, after_paint))
+        {
+          compositor->frame_callbacks_held = TRUE;
+          continue;
+        }
+
+      if (after_paint)
+        surface->frame_undrawn = FALSE;
 
       actor_surface = META_WAYLAND_ACTOR_SURFACE (surface->role);
       meta_wayland_actor_surface_emit_frame_callbacks (actor_surface,

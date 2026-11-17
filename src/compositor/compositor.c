@@ -1583,6 +1583,11 @@ on_presented (ClutterStage     *stage,
 
       for (l = priv->windows; l; l = l->next)
         meta_window_actor_frame_complete (l->data, frame_info, presentation_time);
+
+#ifdef HAVE_WAYLAND
+      if (meta_is_wayland_compositor ())
+        meta_wayland_compositor_frame_completed (meta_wayland_compositor_get_default ());
+#endif
     }
 }
 
