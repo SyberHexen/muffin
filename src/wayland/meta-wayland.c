@@ -36,6 +36,7 @@
 #include "wayland/meta-wayland-cursor-shape.h"
 #include "wayland/meta-wayland-color-management.h"
 #include "wayland/meta-wayland-fractional-scale.h"
+#include "wayland/meta-wayland-presentation-time.h"
 #include "wayland/meta-wayland-data-device.h"
 #include "wayland/meta-wayland-dma-buf.h"
 #include "wayland/meta-wayland-drm.h"
@@ -270,6 +271,7 @@ static void emit_frame_callbacks (MetaWaylandCompositor *compositor,
 void
 meta_wayland_compositor_paint_finished (MetaWaylandCompositor *compositor)
 {
+  meta_wayland_presentation_time_after_paint (compositor);
   emit_frame_callbacks (compositor, TRUE);
 }
 
@@ -573,6 +575,7 @@ meta_wayland_compositor_setup (MetaWaylandCompositor *wayland_compositor)
   meta_wayland_init_fractional_scale (compositor);
   meta_wayland_init_color_management (compositor);
   meta_wayland_init_linux_drm_syncobj (compositor);
+  meta_wayland_init_presentation_time (compositor);
   meta_wayland_keyboard_shortcuts_inhibit_init (compositor);
   meta_wayland_surface_inhibit_shortcuts_dialog_init ();
   meta_wayland_text_input_init (compositor);

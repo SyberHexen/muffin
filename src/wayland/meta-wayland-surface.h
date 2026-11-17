@@ -105,6 +105,9 @@ struct _MetaWaylandSurfaceState
   /* wl_surface.frame */
   struct wl_list frame_callback_list;
 
+  /* wp_presentation.feedback */
+  struct wl_list presentation_feedback_list;
+
   MetaRectangle new_geometry;
   gboolean has_new_geometry;
 
@@ -202,6 +205,14 @@ struct _MetaWaylandSurface
 
   /* A buffer was committed and not drawn yet (frame callbacks wait) */
   gboolean frame_undrawn;
+
+  /* wp_presentation */
+  struct {
+    /* Feedbacks of the last commit, waiting for it to be drawn */
+    struct wl_list feedback_list;
+    /* The view whose timing they report; only compared, never used */
+    ClutterStageView *main_view;
+  } presentation_time;
 
   /* wp_color_management_v1 */
   struct {

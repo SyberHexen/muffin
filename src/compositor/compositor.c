@@ -96,6 +96,7 @@
 #include "meta/meta-wayland-background-actor.h"
 #include "wayland/meta-wayland-layer-shell.h"
 #include "wayland/meta-wayland-outputs.h"
+#include "wayland/meta-wayland-presentation-time.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-wayland-xdg-shell.h"
 #endif
@@ -1589,7 +1590,14 @@ on_presented (ClutterStage     *stage,
 
 #ifdef HAVE_WAYLAND
       if (meta_is_wayland_compositor ())
-        meta_wayland_compositor_frame_completed (meta_wayland_compositor_get_default ());
+        {
+          MetaWaylandCompositor *wayland_compositor =
+            meta_wayland_compositor_get_default ();
+
+          meta_wayland_presentation_time_present (wayland_compositor,
+                                                  frame_info);
+          meta_wayland_compositor_frame_completed (wayland_compositor);
+        }
 #endif
     }
 }
