@@ -115,6 +115,9 @@ struct _MetaOutput
   gboolean vrr_capable;
   MetaOutputVrrMode vrr_mode;
 
+  /* What the EDID allows besides RGB; NULL without a usable EDID */
+  struct _EdidColorFormats *edid_color_formats;
+
   gpointer driver_private;
   GDestroyNotify driver_notify;
 
