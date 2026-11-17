@@ -248,6 +248,11 @@ struct _MetaRendererNative
 
   GList *power_save_page_flip_onscreens;
   guint power_save_page_flip_source_id;
+
+  /* While held, frames are drawn but not shown: what the previous display
+   * server left on screen stays up until there is something to show */
+  gboolean screen_held;
+  guint screen_hold_timeout_id;
 };
 
 static void
@@ -1327,13 +1332,37 @@ dummy_power_save_page_flip_cb (gpointer user_data)
   return G_SOURCE_REMOVE;
 }
 
+/* Whether frames reach the screen: not with the displays powered down, nor
+ * while the screen is held */
+static gboolean
+is_screen_shown (MetaRendererNative *renderer_native,
+                 MetaMonitorManager *monitor_manager)
+{
+  return !renderer_native->screen_held &&
+         meta_monitor_manager_get_power_save_mode (monitor_manager) ==
+         META_POWER_SAVE_ON;
+}
+
 static void
 queue_dummy_power_save_page_flip (CoglOnscreen *onscreen)
 {
   CoglOnscreenEGL *onscreen_egl = onscreen->winsys;
   MetaOnscreenNative *onscreen_native = onscreen_egl->platform;
   MetaRendererNative *renderer_native = onscreen_native->renderer_native;
-  const unsigned int timeout_ms = 100;
+  MetaCrtc *crtc = onscreen_native->crtc;
+  unsigned int timeout_ms = 100;
+
+  /* A held screen is on: complete its frames at the refresh rate, as the
+   * flips would, so the clock and the clients (the wallpaper, the shell
+   * starting up) aren't slowed down to the 10 frames a second that do for
+   * powered down displays */
+  if (renderer_native->screen_held)
+    {
+      float refresh_rate = crtc && crtc->config ?
+                           crtc->config->mode->refresh_rate : 60.0;
+
+      timeout_ms = MAX (1, (unsigned int) (1000.0 / MAX (refresh_rate, 1.0)));
+    }
 
   if (!renderer_native->power_save_page_flip_source_id)
     {
@@ -1450,13 +1479,11 @@ meta_onscreen_native_flip_crtcs (CoglOnscreen  *onscreen,
   MetaRenderer *renderer = META_RENDERER (renderer_native);
   MetaMonitorManager *monitor_manager =
     meta_backend_get_monitor_manager (meta_renderer_get_backend (renderer));
-  MetaPowerSave power_save_mode;
 
   COGL_TRACE_BEGIN_SCOPED (MetaOnscreenNativeFlipCrtcs,
                            "Onscreen (flip CRTCs)");
 
-  power_save_mode = meta_monitor_manager_get_power_save_mode (monitor_manager);
-  if (power_save_mode == META_POWER_SAVE_ON)
+  if (is_screen_shown (renderer_native, monitor_manager))
     {
       meta_onscreen_native_flip_crtc (onscreen, view, onscreen_native->crtc,
                                       kms_update);
@@ -2091,11 +2118,9 @@ ensure_crtc_modes (CoglOnscreen  *onscreen,
   MetaBackend *backend = meta_renderer_get_backend (renderer);
   MetaMonitorManager *monitor_manager =
     meta_backend_get_monitor_manager (backend);
-  MetaPowerSave power_save_mode;
 
-  power_save_mode = meta_monitor_manager_get_power_save_mode (monitor_manager);
   if (onscreen_native->pending_set_crtc &&
-      power_save_mode == META_POWER_SAVE_ON)
+      is_screen_shown (renderer_native, monitor_manager))
     {
       meta_onscreen_native_set_crtc_mode (onscreen,
                                           renderer_gpu_data,
@@ -3510,6 +3535,77 @@ meta_renderer_native_rebuild_views (MetaRenderer *renderer)
   meta_renderer_native_queue_modes_reset (META_RENDERER_NATIVE (renderer));
 }
 
+/* How long a held screen waits for its release at most */
+#define SCREEN_HOLD_TIMEOUT_MS 6000
+
+static gboolean
+screen_hold_timeout_cb (gpointer user_data)
+{
+  MetaRendererNative *renderer_native = user_data;
+
+  renderer_native->screen_hold_timeout_id = 0;
+  g_message ("Showing the screen: not released in time");
+  meta_renderer_native_release_screen (renderer_native);
+
+  return G_SOURCE_REMOVE;
+}
+
+/**
+ * meta_renderer_native_hold_screen:
+ *
+ * Keeps frames off the screen, so that what the previous display server
+ * left there (see meta_kms_prepare_shutdown()) stays up instead of the
+ * first frames, which have nothing to show yet, until
+ * meta_renderer_native_release_screen() or a timeout.  Frames are still
+ * drawn and completed, so clients and animations keep running.
+ */
+void
+meta_renderer_native_hold_screen (MetaRendererNative *renderer_native)
+{
+  if (renderer_native->screen_held)
+    return;
+
+  renderer_native->screen_held = TRUE;
+  renderer_native->screen_hold_timeout_id =
+    g_timeout_add (SCREEN_HOLD_TIMEOUT_MS, screen_hold_timeout_cb,
+                   renderer_native);
+}
+
+void
+meta_renderer_native_release_screen (MetaRendererNative *renderer_native)
+{
+  MetaRenderer *renderer = META_RENDERER (renderer_native);
+  MetaBackend *backend = meta_renderer_get_backend (renderer);
+
+  if (!renderer_native->screen_held)
+    return;
+
+  renderer_native->screen_held = FALSE;
+  g_clear_handle_id (&renderer_native->screen_hold_timeout_id,
+                     g_source_remove);
+
+  /* Complete the frames held back so far now: the next frame is flipped for
+   * real, and a held frame completing after that would swap the real
+   * frame's buffers as its own */
+  if (renderer_native->power_save_page_flip_source_id)
+    {
+      g_clear_handle_id (&renderer_native->power_save_page_flip_source_id,
+                         g_source_remove);
+      dummy_power_save_page_flip_cb (renderer_native);
+    }
+
+  /* Set the modes, and show a whole frame and the pointer */
+  meta_renderer_native_queue_modes_reset (renderer_native);
+  clutter_actor_queue_redraw (meta_backend_get_stage (backend));
+  meta_cursor_renderer_force_update (meta_backend_get_cursor_renderer (backend));
+}
+
+gboolean
+meta_renderer_native_is_screen_held (MetaRendererNative *renderer_native)
+{
+  return renderer_native->screen_held;
+}
+
 void
 meta_renderer_native_finish_frame (MetaRendererNative *renderer_native)
 {
@@ -3521,7 +3617,9 @@ meta_renderer_native_finish_frame (MetaRendererNative *renderer_native)
 
   renderer_native->frame_counter++;
 
-  if (renderer_native->pending_unset_disabled_crtcs)
+  /* (A held screen keeps the previous display server's CRTCs too) */
+  if (renderer_native->pending_unset_disabled_crtcs &&
+      !renderer_native->screen_held)
     {
       kms_update = unset_disabled_crtcs (backend, kms);
       renderer_native->pending_unset_disabled_crtcs = FALSE;
@@ -4457,6 +4555,9 @@ meta_renderer_native_finalize (GObject *object)
 {
   MetaRendererNative *renderer_native = META_RENDERER_NATIVE (object);
 
+  g_clear_handle_id (&renderer_native->screen_hold_timeout_id,
+                     g_source_remove);
+
   if (renderer_native->power_save_page_flip_onscreens)
     {
       g_list_free_full (renderer_native->power_save_page_flip_onscreens,
@@ -4500,6 +4601,10 @@ meta_renderer_native_init (MetaRendererNative *renderer_native)
     g_hash_table_new_full (NULL, NULL,
                            NULL,
                            (GDestroyNotify) meta_renderer_native_gpu_data_free);
+
+  /* Until the plugin has something to show
+   * (meta_release_held_screen_for_display()) */
+  meta_renderer_native_hold_screen (renderer_native);
 }
 
 static void
