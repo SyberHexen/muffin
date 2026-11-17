@@ -606,3 +606,9 @@ cogl_onscreen_get_frame_counter (CoglOnscreen *onscreen)
 {
   return onscreen->frame_counter;
 }
+
+gboolean
+cogl_onscreen_has_pending_frame (CoglOnscreen *onscreen)
+{
+  return !g_queue_is_empty (&onscreen->pending_frame_infos);
+}

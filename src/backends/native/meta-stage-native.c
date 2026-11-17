@@ -40,9 +40,6 @@ struct _MetaStageNative
   ClutterStageCogl parent;
 
   CoglClosure *frame_closure;
-
-  int64_t presented_frame_counter_sync;
-  int64_t presented_frame_counter_complete;
 };
 
 static void
@@ -53,6 +50,25 @@ G_DEFINE_TYPE_WITH_CODE (MetaStageNative, meta_stage_native,
                          G_IMPLEMENT_INTERFACE (CLUTTER_TYPE_STAGE_WINDOW,
                                                 clutter_stage_window_iface_init))
 
+/* A view's frame events: each monitor's frames are timed by its own */
+typedef struct _ViewFrameData
+{
+  MetaStageNative *stage_native;
+  ClutterStageView *view;
+
+  int64_t presented_frame_counter_sync;
+  int64_t presented_frame_counter_complete;
+} ViewFrameData;
+
+static void
+view_frame_data_free (gpointer data)
+{
+  ViewFrameData *frame_data = data;
+
+  g_clear_weak_pointer (&frame_data->view);
+  g_free (frame_data);
+}
+
 static void
 frame_cb (CoglOnscreen  *onscreen,
           CoglFrameEvent frame_event,
@@ -60,23 +76,26 @@ frame_cb (CoglOnscreen  *onscreen,
           void          *user_data)
 
 {
-  MetaStageNative *stage_native = user_data;
-  ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (stage_native);
+  ViewFrameData *frame_data = user_data;
+  ClutterStageCogl *stage_cogl = CLUTTER_STAGE_COGL (frame_data->stage_native);
   int64_t global_frame_counter;
   int64_t presented_frame_counter;
   ClutterFrameInfo clutter_frame_info;
+
+  if (!frame_data->view)
+    return;
 
   global_frame_counter = cogl_frame_info_get_global_frame_counter (frame_info);
 
   switch (frame_event)
     {
     case COGL_FRAME_EVENT_SYNC:
-      presented_frame_counter = stage_native->presented_frame_counter_sync;
-      stage_native->presented_frame_counter_sync = global_frame_counter;
+      presented_frame_counter = frame_data->presented_frame_counter_sync;
+      frame_data->presented_frame_counter_sync = global_frame_counter;
       break;
     case COGL_FRAME_EVENT_COMPLETE:
-      presented_frame_counter = stage_native->presented_frame_counter_complete;
-      stage_native->presented_frame_counter_complete = global_frame_counter;
+      presented_frame_counter = frame_data->presented_frame_counter_complete;
+      frame_data->presented_frame_counter_complete = global_frame_counter;
       break;
     default:
       g_assert_not_reached ();
@@ -91,7 +110,8 @@ frame_cb (CoglOnscreen  *onscreen,
     .presentation_time = cogl_frame_info_get_presentation_time (frame_info)
   };
 
-  _clutter_stage_cogl_presented (stage_cogl, frame_event, &clutter_frame_info);
+  _clutter_stage_cogl_view_presented (stage_cogl, frame_data->view,
+                                      frame_event, &clutter_frame_info);
 }
 
 static void
@@ -101,18 +121,25 @@ ensure_frame_callback (MetaStageNative  *stage_native,
   CoglFramebuffer *framebuffer;
   CoglOnscreen *onscreen;
   CoglClosure *closure;
+  ViewFrameData *frame_data;
 
   closure = g_object_get_qdata (G_OBJECT (stage_view),
                                 quark_view_frame_closure);
   if (closure)
     return;
 
+  frame_data = g_new0 (ViewFrameData, 1);
+  frame_data->stage_native = stage_native;
+  g_set_weak_pointer (&frame_data->view, stage_view);
+  frame_data->presented_frame_counter_sync = -1;
+  frame_data->presented_frame_counter_complete = -1;
+
   framebuffer = clutter_stage_view_get_onscreen (stage_view);
   onscreen = COGL_ONSCREEN (framebuffer);
   closure = cogl_onscreen_add_frame_callback (onscreen,
                                               frame_cb,
-                                              stage_native,
-                                              NULL);
+                                              frame_data,
+                                              view_frame_data_free);
   g_object_set_qdata (G_OBJECT (stage_view),
                       quark_view_frame_closure,
                       closure);
@@ -219,8 +246,6 @@ meta_stage_native_set_cursor_visible (ClutterStageWindow *stage_window,
 static void
 meta_stage_native_init (MetaStageNative *stage_native)
 {
-  stage_native->presented_frame_counter_sync = -1;
-  stage_native->presented_frame_counter_complete = -1;
 }
 
 static void
