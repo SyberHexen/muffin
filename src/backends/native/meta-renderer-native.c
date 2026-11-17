@@ -1115,7 +1115,9 @@ meta_onscreen_native_swap_drm_fb (CoglOnscreen *onscreen)
 static void
 notify_view_crtc_presented (MetaRendererView *view,
                             MetaKmsCrtc      *kms_crtc,
-                            int64_t           time_ns)
+                            int64_t           time_ns,
+                            unsigned int      sequence,
+                            gboolean          hw_clock)
 {
   ClutterStageView *stage_view = CLUTTER_STAGE_VIEW (view);
   CoglFramebuffer *framebuffer =
@@ -1145,6 +1147,7 @@ notify_view_crtc_presented (MetaRendererView *view,
     {
       frame_info->presentation_time = time_ns;
       frame_info->refresh_rate = refresh_rate;
+      cogl_frame_info_set_hw_timing (frame_info, sequence, hw_clock);
     }
 
   gpu_kms = META_GPU_KMS (meta_crtc_get_gpu (crtc));
@@ -1196,15 +1199,37 @@ page_flip_feedback_flipped (MetaKmsCrtc  *kms_crtc,
                             gpointer      user_data)
 {
   MetaRendererView *view = user_data;
+  MetaCrtc *crtc = meta_crtc_kms_from_kms_crtc (kms_crtc);
   struct timeval page_flip_time;
+  int64_t time_ns;
+  int64_t now_ns;
+  int64_t refresh_interval_ns = 0;
+  gboolean hw_clock = TRUE;
 
   page_flip_time = (struct timeval) {
     .tv_sec = tv_sec,
     .tv_usec = tv_usec,
   };
+  time_ns = timeval_to_nanoseconds (&page_flip_time);
 
-  notify_view_crtc_presented (view, kms_crtc,
-                              timeval_to_nanoseconds (&page_flip_time));
+  /* A driver may hand out a stale or bogus time and counter (nvidia-drm
+   * with vblank=1 does): a frame that just flipped can't be shown in the
+   * future, nor more than a couple of refreshes ago. Use the current time
+   * then, and don't call it the hardware's. */
+  now_ns = meta_gpu_kms_get_current_time_ns (META_GPU_KMS (meta_crtc_get_gpu (crtc)));
+  if (crtc && crtc->config && crtc->config->mode->refresh_rate > 0.0f)
+    refresh_interval_ns =
+      (int64_t) (G_GINT64_CONSTANT (1000000000) / crtc->config->mode->refresh_rate);
+
+  if (time_ns > now_ns + G_GINT64_CONSTANT (1000000) ||
+      (refresh_interval_ns > 0 && time_ns < now_ns - 2 * refresh_interval_ns))
+    {
+      time_ns = now_ns;
+      sequence = 0;
+      hw_clock = FALSE;
+    }
+
+  notify_view_crtc_presented (view, kms_crtc, time_ns, sequence, hw_clock);
 
   g_object_unref (view);
 }
@@ -1227,7 +1252,7 @@ page_flip_feedback_mode_set_fallback (MetaKmsCrtc *kms_crtc,
   gpu_kms = META_GPU_KMS (meta_crtc_get_gpu (crtc));
   now_ns = meta_gpu_kms_get_current_time_ns (gpu_kms);
 
-  notify_view_crtc_presented (view, kms_crtc, now_ns);
+  notify_view_crtc_presented (view, kms_crtc, now_ns, 0, FALSE);
 
   g_object_unref (view);
 }
@@ -1254,7 +1279,7 @@ page_flip_feedback_discarded (MetaKmsCrtc  *kms_crtc,
   gpu_kms = META_GPU_KMS (meta_crtc_get_gpu (crtc));
   now_ns = meta_gpu_kms_get_current_time_ns (gpu_kms);
 
-  notify_view_crtc_presented (view, kms_crtc, now_ns);
+  notify_view_crtc_presented (view, kms_crtc, now_ns, 0, FALSE);
 
   g_object_unref (view);
 }

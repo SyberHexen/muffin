@@ -83,3 +83,24 @@ cogl_frame_info_get_global_frame_counter (CoglFrameInfo *info)
 {
   return info->global_frame_counter;
 }
+
+int64_t
+cogl_frame_info_get_sequence (CoglFrameInfo *info)
+{
+  return info->sequence;
+}
+
+gboolean
+cogl_frame_info_get_hw_clock (CoglFrameInfo *info)
+{
+  return info->hw_clock;
+}
+
+void
+cogl_frame_info_set_hw_timing (CoglFrameInfo *info,
+                               int64_t        sequence,
+                               gboolean       hw_clock)
+{
+  info->sequence = sequence;
+  info->hw_clock = hw_clock;
+}
