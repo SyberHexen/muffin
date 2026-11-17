@@ -71,6 +71,8 @@ typedef struct _ClutterStageViewPrivate
   gboolean has_redraw_clip;
   cairo_region_t *redraw_clip;
 
+  gboolean painted;
+
   guint dirty_viewport   : 1;
   guint dirty_projection : 1;
 } ClutterStageViewPrivate;
@@ -929,6 +931,40 @@ clutter_stage_view_has_redraw_clip (ClutterStageView *view)
     clutter_stage_view_get_instance_private (view);
 
   return priv->has_redraw_clip;
+}
+
+void
+clutter_stage_view_set_painted (ClutterStageView *view,
+                                gboolean          painted)
+{
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  priv->painted = painted;
+}
+
+gboolean
+clutter_stage_view_was_painted (ClutterStageView *view)
+{
+  ClutterStageViewPrivate *priv =
+    clutter_stage_view_get_instance_private (view);
+
+  return priv->painted;
+}
+
+gboolean
+clutter_stage_view_has_queued_redraw (ClutterStageView *view)
+{
+  return clutter_stage_view_has_redraw_clip (view);
+}
+
+gboolean
+clutter_stage_view_has_pending_frame (ClutterStageView *view)
+{
+  CoglFramebuffer *onscreen = clutter_stage_view_get_onscreen (view);
+
+  return onscreen && cogl_is_onscreen (onscreen) &&
+         cogl_onscreen_has_pending_frame (COGL_ONSCREEN (onscreen));
 }
 
 /**

@@ -42,13 +42,17 @@ struct _ClutterStageCogl
   /* back pointer to the backend */
   ClutterBackend *backend;
 
-  float refresh_rate;
-  int pending_swaps;
-
-  gint64 last_presentation_time;
+  /* A stage update that no view's damage times (an animation's next step,
+   * a relayout, events): asked for, its time and the next presentation
+   * time it was timed for; each view has its own (ClutterStageViewCogl) */
+  gboolean update_wanted;
+  /* Asked to update at once (clutter_stage_skip_sync_delay()) */
+  gboolean update_immediately;
   gint64 update_time;
   int64_t last_update_time;
   int64_t next_presentation_time;
+  /* Presentation time of the earliest view or stage update */
+  int64_t earliest_presentation_time;
 
   /* We only enable clipped redraws after 2 frames, since we've seen
    * a lot of drivers can struggle to get going and may output some
@@ -70,6 +74,12 @@ CLUTTER_EXPORT
 void _clutter_stage_cogl_presented (ClutterStageCogl *stage_cogl,
                                     CoglFrameEvent    frame_event,
                                     ClutterFrameInfo *frame_info);
+
+CLUTTER_EXPORT
+void _clutter_stage_cogl_view_presented (ClutterStageCogl *stage_cogl,
+                                         ClutterStageView *view,
+                                         CoglFrameEvent    frame_event,
+                                         ClutterFrameInfo *frame_info);
 
 G_END_DECLS
 

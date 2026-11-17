@@ -50,6 +50,9 @@ gboolean clutter_stage_view_has_full_redraw_clip (ClutterStageView *view);
 
 gboolean clutter_stage_view_has_redraw_clip (ClutterStageView *view);
 
+void clutter_stage_view_set_painted (ClutterStageView *view,
+                                     gboolean          painted);
+
 const cairo_region_t * clutter_stage_view_peek_redraw_clip (ClutterStageView *view);
 
 cairo_region_t * clutter_stage_view_take_redraw_clip (ClutterStageView *view);

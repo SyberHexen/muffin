@@ -774,6 +774,17 @@ cogl_is_onscreen (void *object);
 COGL_EXPORT int64_t
 cogl_onscreen_get_frame_counter (CoglOnscreen *onscreen);
 
+/**
+ * cogl_onscreen_has_pending_frame:
+ * @onscreen: A #CoglOnscreen framebuffer
+ *
+ * Return value: whether a frame swapped to @onscreen hasn't completed yet
+ * (with %COGL_WINSYS_FEATURE_SYNC_AND_COMPLETE_EVENT: is still waiting for
+ * its page flip)
+ */
+COGL_EXPORT gboolean
+cogl_onscreen_has_pending_frame (CoglOnscreen *onscreen);
+
 G_END_DECLS
 
 #endif /* __COGL_ONSCREEN_H */

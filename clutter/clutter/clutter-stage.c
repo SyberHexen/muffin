@@ -1624,6 +1624,23 @@ clutter_stage_update_devices (ClutterStage *stage)
   COGL_TRACE_END (ClutterStagePick);
 }
 
+static gboolean
+stage_has_view_redraw_clips (ClutterStage *stage)
+{
+  GList *l;
+
+  if (!stage->priv->impl)
+    return FALSE;
+
+  for (l = _clutter_stage_window_get_views (stage->priv->impl); l; l = l->next)
+    {
+      if (clutter_stage_view_has_redraw_clip (l->data))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 /**
  * _clutter_stage_do_update:
  * @stage: A #ClutterStage
@@ -1669,6 +1686,12 @@ _clutter_stage_do_update (ClutterStage *stage)
    */
   if (!priv->redraw_pending)
     {
+      GList *l;
+
+      /* Nothing was drawn in this update */
+      for (l = _clutter_stage_window_get_views (priv->impl); l; l = l->next)
+        clutter_stage_view_set_painted (l->data, FALSE);
+
       if (priv->needs_update_devices)
         {
           priv->needs_update_devices = FALSE;
@@ -1690,6 +1713,11 @@ _clutter_stage_do_update (ClutterStage *stage)
 
   /* reset the guard, so that new redraws are possible */
   priv->redraw_pending = FALSE;
+
+  /* Each monitor is drawn on its own refresh cycle: one that wasn't due
+   * yet keeps its damage, and the stage stays queued for it */
+  if (stage_has_view_redraw_clips (stage))
+    priv->redraw_pending = TRUE;
 
 #ifdef CLUTTER_ENABLE_DEBUG
   if (priv->redraw_count > 0)
