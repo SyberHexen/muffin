@@ -69,4 +69,16 @@ CLUTTER_EXPORT
 void clutter_stage_view_get_offscreen_transformation_matrix (ClutterStageView *view,
                                                              CoglMatrix       *matrix);
 
+/* Whether the view was drawn (or scanned out) in the last stage redraw */
+CLUTTER_EXPORT
+gboolean clutter_stage_view_was_painted (ClutterStageView *view);
+
+/* Whether the view still waits for its last frame to be shown */
+CLUTTER_EXPORT
+gboolean clutter_stage_view_has_pending_frame (ClutterStageView *view);
+
+/* Whether part of the view is queued to be drawn */
+CLUTTER_EXPORT
+gboolean clutter_stage_view_has_queued_redraw (ClutterStageView *view);
+
 #endif /* __CLUTTER_STAGE_VIEW_H__ */
