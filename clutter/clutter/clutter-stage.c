@@ -162,6 +162,10 @@ struct _ClutterStagePrivate
   guint redraw_pending         : 1;
   /* redraw_pending is only kept for views waiting for their own time */
   guint redraw_pending_for_views : 1;
+
+  /* The views the running animations are on (their ticks follow those
+   * monitors), NULL for any view; compared with the current views only */
+  GList *tick_views;
   guint is_cursor_visible      : 1;
   guint throttle_motion_events : 1;
   guint use_alpha              : 1;
@@ -1345,6 +1349,28 @@ _clutter_stage_needs_update (ClutterStage *stage)
 }
 
 /*
+ * _clutter_stage_set_tick_views:
+ * @stage: A #ClutterStage
+ * @views: (transfer full): the views the running animations are on, or
+ *   %NULL if any view (or no animation runs)
+ *
+ * Stage updates for animations are timed by the fastest of these views.
+ */
+void
+_clutter_stage_set_tick_views (ClutterStage *stage,
+                               GList        *views)
+{
+  g_list_free (stage->priv->tick_views);
+  stage->priv->tick_views = views;
+}
+
+GList *
+_clutter_stage_get_tick_views (ClutterStage *stage)
+{
+  return stage->priv->tick_views;
+}
+
+/*
  * _clutter_stage_needs_stage_update:
  * @stage: A #ClutterStage
  *
@@ -2199,6 +2225,8 @@ clutter_stage_finalize (GObject *object)
 
   if (priv->paint_notify != NULL)
     priv->paint_notify (priv->paint_data);
+
+  g_clear_pointer (&priv->tick_views, g_list_free);
 
   G_OBJECT_CLASS (clutter_stage_parent_class)->finalize (object);
 }

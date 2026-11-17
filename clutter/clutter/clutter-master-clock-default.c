@@ -39,6 +39,8 @@
 #include "clutter-private.h"
 #include "clutter-stage-manager-private.h"
 #include "clutter-stage-private.h"
+#include "clutter-actor-private.h"
+#include "clutter-transition.h"
 
 #ifdef CLUTTER_ENABLE_DEBUG
 #define clutter_warn_if_over_budget(master_clock,start_time,section)    G_STMT_START  { \
@@ -285,11 +287,67 @@ master_clock_reschedule_stage_updates (ClutterMasterClockDefault *master_clock,
  * Return value: -1 if there is no next frame pending, otherwise the
  *  number of millseconds before the we need to draw the next frame
  */
+/* The views the running animations are on: their ticks follow those
+ * monitors rather than the fastest one. Animations of actors (transitions)
+ * are on their actor's views; any other one, or an actor not on a view
+ * yet, can be on any view. */
+static void
+master_clock_sync_tick_views (ClutterMasterClockDefault *master_clock)
+{
+  ClutterStageManager *stage_manager = clutter_stage_manager_get_default ();
+  const GSList *stages, *s;
+  GSList *l;
+  GList *views = NULL;
+  gboolean any_view = master_clock->timelines == NULL;
+
+  for (l = master_clock->timelines; l && !any_view; l = l->next)
+    {
+      ClutterTimeline *timeline = l->data;
+      ClutterAnimatable *animatable = NULL;
+      GList *actor_views, *v;
+
+      if (CLUTTER_IS_TRANSITION (timeline))
+        animatable = clutter_transition_get_animatable (CLUTTER_TRANSITION (timeline));
+
+      if (!animatable || !CLUTTER_IS_ACTOR (animatable) ||
+          !clutter_actor_is_mapped (CLUTTER_ACTOR (animatable)))
+        {
+          any_view = TRUE;
+          break;
+        }
+
+      actor_views = clutter_actor_peek_stage_views (CLUTTER_ACTOR (animatable));
+      if (!actor_views)
+        {
+          any_view = TRUE;
+          break;
+        }
+
+      for (v = actor_views; v; v = v->next)
+        {
+          if (!g_list_find (views, v->data))
+            views = g_list_prepend (views, v->data);
+        }
+    }
+
+  if (any_view)
+    g_clear_pointer (&views, g_list_free);
+
+  stages = clutter_stage_manager_peek_stages (stage_manager);
+  for (s = stages; s; s = s->next)
+    _clutter_stage_set_tick_views (s->data, s->next ? g_list_copy (views) : views);
+
+  if (!stages)
+    g_list_free (views);
+}
+
 static gint
 master_clock_next_frame_delay (ClutterMasterClockDefault *master_clock)
 {
   if (!master_clock_is_running (master_clock))
     return -1;
+
+  master_clock_sync_tick_views (master_clock);
 
   /* If all of the stages are busy waiting for a swap-buffers to complete
    * then we wait for one to be ready.. */

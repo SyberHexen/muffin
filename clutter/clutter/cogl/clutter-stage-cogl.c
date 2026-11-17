@@ -310,16 +310,26 @@ ensure_stage_update_time (ClutterStageCogl *stage_cogl,
 {
   ClutterStageView *fastest = NULL;
   ClutterStageViewCoglPrivate *fastest_priv = NULL;
-  GList *views, *l;
+  GList *views, *l, *tick_views;
+  gboolean restricted = FALSE;
 
   if (!stage_cogl->update_wanted || stage_cogl->update_time != -1)
     return;
 
   views = _clutter_stage_window_get_views (CLUTTER_STAGE_WINDOW (stage_cogl));
+
+  /* Animations tick with the monitors they're on, if those are known */
+  tick_views = _clutter_stage_get_tick_views (stage_cogl->wrapper);
+  for (l = views; l && tick_views && !restricted; l = l->next)
+    restricted = g_list_find (tick_views, l->data) != NULL;
+
   for (l = views; l; l = l->next)
     {
       ClutterStageView *view = l->data;
       ClutterStageViewCoglPrivate *view_priv = view_timing (view);
+
+      if (restricted && !g_list_find (tick_views, view))
+        continue;
 
       if (clutter_stage_view_has_pending_frame (view))
         continue;
