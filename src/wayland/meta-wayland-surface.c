@@ -188,6 +188,9 @@ meta_wayland_buffer_ref_dec_use_count (MetaWaylandBufferRef *buffer_ref)
 
   buffer_ref->use_count--;
 
+  if (buffer_ref->use_count == 0)
+    meta_wayland_buffer_signal_release_points (buffer);
+
   if (buffer_ref->use_count == 0 && buffer->resource)
     wl_buffer_send_release (buffer->resource);
 }
@@ -1003,6 +1006,10 @@ meta_wayland_surface_commit (MetaWaylandSurface *surface)
       !meta_wayland_buffer_is_realized (pending->buffer))
     meta_wayland_buffer_realize (pending->buffer);
 
+  if (!meta_wayland_linux_drm_syncobj_commit (surface, pending->buffer,
+                                              pending->newly_attached))
+    return;
+
   /*
    * If this is a sub-surface and it is in effective synchronous mode, only
    * cache the pending surface state until either one of the following two
@@ -1629,6 +1636,7 @@ wl_surface_destructor (struct wl_resource *resource)
   g_signal_emit (surface, surface_signals[SURFACE_DESTROY], 0);
 
   meta_wayland_color_management_surface_destroyed (surface);
+  meta_wayland_linux_drm_syncobj_surface_destroyed (surface);
 
   g_clear_object (&surface->scanout_candidate);
   g_clear_object (&surface->role);
