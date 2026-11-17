@@ -20,6 +20,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <X11/extensions/Xdamage.h>
 
 #include "core/frame.h"
 #include "core/window-private.h"
@@ -49,7 +50,17 @@ struct _MetaWindowXwayland
 
   gboolean xwayland_may_grab_keyboard;
   int freeze_count;
+
+  /* Commits are frozen while the window is minimized, and after it's
+   * unminimized until the client draws (restore_damage) or a timeout */
+  gboolean frozen_for_minimize;
+  Damage restore_damage;
+  guint restore_timeout_id;
 };
+
+/* How long an unminimized window keeps showing its last frame at most,
+ * waiting for its client to draw: Chromium-based clients take ~20 ms */
+#define RESTORE_DRAW_TIMEOUT_MS 300
 
 struct _MetaWindowXwaylandClass
 {
@@ -58,9 +69,149 @@ struct _MetaWindowXwaylandClass
 
 G_DEFINE_TYPE (MetaWindowXwayland, meta_window_xwayland, META_TYPE_WINDOW_X11)
 
+static void meta_window_xwayland_freeze_commits (MetaWindow *window);
+static void meta_window_xwayland_thaw_commits (MetaWindow *window);
+
+static void
+stop_waiting_for_restore_draw (MetaWindowXwayland *xwayland_window)
+{
+  MetaWindow *window = META_WINDOW (xwayland_window);
+
+  g_clear_handle_id (&xwayland_window->restore_timeout_id, g_source_remove);
+
+  if (xwayland_window->restore_damage)
+    {
+      MetaX11Display *x11_display = window->display->x11_display;
+
+      if (x11_display)
+        {
+          meta_x11_error_trap_push (x11_display);
+          XDamageDestroy (x11_display->xdisplay, xwayland_window->restore_damage);
+          meta_x11_error_trap_pop (x11_display);
+        }
+      xwayland_window->restore_damage = None;
+    }
+}
+
+static void
+end_minimize_freeze (MetaWindowXwayland *xwayland_window)
+{
+  stop_waiting_for_restore_draw (xwayland_window);
+
+  if (xwayland_window->frozen_for_minimize)
+    {
+      xwayland_window->frozen_for_minimize = FALSE;
+      meta_window_xwayland_thaw_commits (META_WINDOW (xwayland_window));
+    }
+}
+
+static gboolean
+restore_draw_timeout (gpointer user_data)
+{
+  MetaWindowXwayland *xwayland_window = user_data;
+
+  xwayland_window->restore_timeout_id = 0;
+  end_minimize_freeze (xwayland_window);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* Watches for the client's first drawing after the window is unminimized,
+ * which replaces what it drew while it was hidden */
+static void
+wait_for_restore_draw (MetaWindowXwayland *xwayland_window)
+{
+  MetaWindow *window = META_WINDOW (xwayland_window);
+  MetaX11Display *x11_display = window->display->x11_display;
+
+  if (x11_display && META_X11_DISPLAY_HAS_DAMAGE (x11_display) &&
+      window->xwindow)
+    {
+      meta_x11_error_trap_push (x11_display);
+      xwayland_window->restore_damage =
+        XDamageCreate (x11_display->xdisplay, window->xwindow,
+                       XDamageReportNonEmpty);
+      if (meta_x11_error_trap_pop_with_return (x11_display) != Success)
+        xwayland_window->restore_damage = None;
+    }
+
+  if (!xwayland_window->restore_damage)
+    {
+      end_minimize_freeze (xwayland_window);
+      return;
+    }
+
+  xwayland_window->restore_timeout_id =
+    g_timeout_add (RESTORE_DRAW_TIMEOUT_MS, restore_draw_timeout, xwayland_window);
+  g_source_set_name_by_id (xwayland_window->restore_timeout_id,
+                           "[muffin] restore_draw_timeout");
+}
+
+gboolean
+meta_window_xwayland_handle_damage_notify (MetaX11Display *x11_display,
+                                           XEvent         *xevent)
+{
+  XDamageNotifyEvent *event = (XDamageNotifyEvent *) xevent;
+  MetaWindow *window;
+  MetaWindowXwayland *xwayland_window;
+
+  window = meta_x11_display_lookup_x_window (x11_display, event->drawable);
+  if (!window || !META_IS_WINDOW_XWAYLAND (window))
+    return FALSE;
+
+  xwayland_window = META_WINDOW_XWAYLAND (window);
+  if (xwayland_window->restore_damage == None ||
+      xwayland_window->restore_damage != event->damage)
+    return FALSE;
+
+  end_minimize_freeze (xwayland_window);
+  return TRUE;
+}
+
+/* A minimized window keeps the last frame it showed: its preview (window
+ * list thumbnails, the minimize and unminimize animations) shows that
+ * frame and not what the client draws while it knows it's hidden (some
+ * clear their window then, Chromium-based ones paint it white), and it
+ * doesn't commit frames nobody sees. Once unminimized, it keeps that frame
+ * until the client draws again (Chromium-based clients take ~20 ms),
+ * instead of showing what it drew while hidden. */
+static void
+on_minimized_changed (MetaWindow *window,
+                      GParamSpec *pspec,
+                      gpointer    user_data)
+{
+  MetaWindowXwayland *xwayland_window = META_WINDOW_XWAYLAND (window);
+
+  if (window->minimized)
+    {
+      stop_waiting_for_restore_draw (xwayland_window);
+
+      if (!xwayland_window->frozen_for_minimize)
+        {
+          xwayland_window->frozen_for_minimize = TRUE;
+          meta_window_xwayland_freeze_commits (window);
+        }
+    }
+  else if (xwayland_window->frozen_for_minimize &&
+           !xwayland_window->restore_damage)
+    {
+      wait_for_restore_draw (xwayland_window);
+    }
+}
+
+static void
+meta_window_xwayland_dispose (GObject *object)
+{
+  stop_waiting_for_restore_draw (META_WINDOW_XWAYLAND (object));
+
+  G_OBJECT_CLASS (meta_window_xwayland_parent_class)->dispose (object);
+}
+
 static void
 meta_window_xwayland_init (MetaWindowXwayland *window_xwayland)
 {
+  g_signal_connect (window_xwayland, "notify::minimized",
+                    G_CALLBACK (on_minimized_changed), NULL);
 }
 
 static int
@@ -444,6 +595,7 @@ meta_window_xwayland_class_init (MetaWindowXwaylandClass *klass)
 
   gobject_class->get_property = meta_window_xwayland_get_property;
   gobject_class->set_property = meta_window_xwayland_set_property;
+  gobject_class->dispose = meta_window_xwayland_dispose;
 
   obj_props[PROP_XWAYLAND_MAY_GRAB_KEYBOARD] =
     g_param_spec_boolean ("xwayland-may-grab-keyboard",
