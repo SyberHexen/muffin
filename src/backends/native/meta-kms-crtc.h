@@ -75,6 +75,34 @@ const MetaKmsCrtcState * meta_kms_crtc_get_current_state (MetaKmsCrtc *crtc);
 
 uint32_t meta_kms_crtc_get_id (MetaKmsCrtc *crtc);
 
+/* Whether the CRTC has DEGAMMA_LUT, CTM and GAMMA_LUT */
+gboolean meta_kms_crtc_supports_color_pipeline (MetaKmsCrtc *crtc);
+
+void meta_kms_crtc_set_sdr_to_display (MetaKmsCrtc *crtc,
+                                       const float  to_display[9]);
+
+gboolean meta_kms_crtc_has_sdr_to_display (MetaKmsCrtc *crtc);
+
+gboolean meta_kms_crtc_is_color_pipeline_programmed (MetaKmsCrtc *crtc);
+
+gboolean meta_kms_crtc_program_color_pipeline (MetaKmsCrtc     *crtc,
+                                               int              fd,
+                                               int              size,
+                                               const uint16_t  *red,
+                                               const uint16_t  *green,
+                                               const uint16_t  *blue,
+                                               GError         **error);
+
+void meta_kms_crtc_clear_color_pipeline (MetaKmsCrtc *crtc,
+                                         int          fd);
+
+gboolean meta_kms_crtc_set_gamma_without_mapping (MetaKmsCrtc    *crtc,
+                                                  int             fd,
+                                                  int             size,
+                                                  const uint16_t *red,
+                                                  const uint16_t *green,
+                                                  const uint16_t *blue);
+
 int meta_kms_crtc_get_idx (MetaKmsCrtc *crtc);
 
 #endif /* META_KMS_CRTC_H */

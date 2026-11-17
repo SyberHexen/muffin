@@ -48,6 +48,12 @@ gboolean meta_output_kms_get_gamma (MetaOutput  *output,
                                     uint16_t   **green_out,
                                     uint16_t   **blue_out);
 
+/* MUFFIN_SDR_EDID_COLORS=1: SDR colors shown in their own (BT.709) colors
+ * on a wide gamut display */
+gboolean meta_output_kms_wants_sdr_colors_mapped (MetaOutput *output);
+
+gboolean meta_output_kms_maps_sdr_colors_in_hardware (MetaOutput *output);
+
 uint32_t meta_output_kms_get_connector_id (MetaOutput *output);
 
 GBytes * meta_output_kms_read_edid (MetaOutput *output);

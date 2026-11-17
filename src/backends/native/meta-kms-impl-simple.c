@@ -305,6 +305,22 @@ process_crtc_gamma (MetaKmsImpl    *impl,
   int ret;
 
   fd = meta_kms_impl_device_get_fd (impl_device);
+
+  if (gamma->done_before_mode_set)
+    return TRUE;
+
+  /* SDR colors mapped to the display's primaries: the ramp goes in the
+   * color pipeline, after the conversion */
+  if (meta_kms_crtc_has_sdr_to_display (crtc))
+    return meta_kms_crtc_program_color_pipeline (crtc, fd, gamma->size,
+                                                 gamma->red, gamma->green,
+                                                 gamma->blue, error);
+
+  if (meta_kms_crtc_set_gamma_without_mapping (crtc, fd, gamma->size,
+                                               gamma->red, gamma->green,
+                                               gamma->blue))
+    return TRUE;
+
   ret = drmModeCrtcSetGamma (fd, meta_kms_crtc_get_id (crtc),
                              gamma->size,
                              gamma->red,
@@ -319,6 +335,28 @@ process_crtc_gamma (MetaKmsImpl    *impl,
       return FALSE;
     }
 
+  return TRUE;
+}
+
+/* A CRTC mapping SDR colors in its color pipeline gets it set before its
+ * mode set: the first frame shown is then already mapped (the pipeline's
+ * properties stay through a mode set), instead of a few frames in the
+ * display's own oversaturated colors */
+static gboolean
+process_crtc_color_pipeline_before_mode_set (MetaKmsImpl    *impl,
+                                             MetaKmsUpdate  *update,
+                                             gpointer        update_entry,
+                                             GError        **error)
+{
+  MetaKmsCrtcGamma *gamma = update_entry;
+
+  if (!meta_kms_crtc_has_sdr_to_display (gamma->crtc))
+    return TRUE;
+
+  if (!process_crtc_gamma (impl, update, update_entry, error))
+    return FALSE;
+
+  gamma->done_before_mode_set = TRUE;
   return TRUE;
 }
 
@@ -1007,6 +1045,13 @@ meta_kms_impl_simple_process_update (MetaKmsImpl   *impl,
                         update,
                         meta_kms_update_get_connector_properties (update),
                         process_connector_property,
+                        &error))
+    goto err_planes_not_assigned;
+
+  if (!process_entries (impl,
+                        update,
+                        meta_kms_update_get_crtc_gammas (update),
+                        process_crtc_color_pipeline_before_mode_set,
                         &error))
     goto err_planes_not_assigned;
 

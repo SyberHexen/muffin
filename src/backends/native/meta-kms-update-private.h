@@ -81,6 +81,9 @@ typedef struct _MetaKmsCrtcGamma
   uint16_t *red;
   uint16_t *green;
   uint16_t *blue;
+
+  /* Set in the CRTC's color pipeline before the mode sets */
+  gboolean done_before_mode_set;
 } MetaKmsCrtcGamma;
 
 typedef struct _MetaKmsPageFlip
