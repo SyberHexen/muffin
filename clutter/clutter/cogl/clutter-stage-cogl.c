@@ -118,6 +118,7 @@ static int64_t
 compute_update_time (float     refresh_rate,
                      int64_t   last_presentation_time,
                      int64_t   last_update_time,
+                     gboolean  vrr_active,
                      int       sync_delay,
                      int64_t   now,
                      int64_t  *next_presentation_time_out)
@@ -136,6 +137,17 @@ compute_update_time (float     refresh_rate,
   refresh_interval = (int64_t) (0.5 + G_USEC_PER_SEC / refresh_rate);
   if (refresh_interval == 0)
     return now;
+
+  /* A monitor that varies its refresh rate shows a frame when it's ready,
+   * no faster than it can: draw at once instead of at the next point of a
+   * fixed rhythm, at most one frame per refresh interval (an update that
+   * draws nothing would otherwise be scheduled again at once) */
+  if (vrr_active)
+    {
+      update_time = MAX (now, last_update_time + refresh_interval);
+      *next_presentation_time_out = update_time + refresh_interval;
+      return update_time;
+    }
 
   min_render_time_allowed = refresh_interval / 2;
   max_render_time_allowed = refresh_interval - 1000 * MAX (sync_delay, 0);
@@ -199,6 +211,7 @@ view_schedule_update (ClutterStageCogl *stage_cogl,
     compute_update_time (view_priv->refresh_rate,
                          view_priv->last_presentation_time,
                          view_priv->last_update_time,
+                         clutter_stage_view_is_vrr_active (view),
                          stage_cogl->last_sync_delay,
                          now,
                          &view_priv->next_presentation_time);
@@ -220,6 +233,7 @@ clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
   ClutterStageViewCoglPrivate *view_priv = view_timing (view);
   int64_t next_presentation_time;
   int64_t refresh_interval;
+  int64_t update_time;
 
   if (!view_priv || view_priv->refresh_rate <= 0.0)
     return 0;
@@ -228,16 +242,25 @@ clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
   if (refresh_interval_out)
     *refresh_interval_out = refresh_interval;
 
-  /* Its next frame is timed already */
+  /* Its next frame is timed already; with VRR it is shown about as soon as
+   * it's drawn */
   if (view_priv->update_time != -1)
-    return MAX (view_priv->next_presentation_time, 0);
+    {
+      if (clutter_stage_view_is_vrr_active (view))
+        return view_priv->update_time;
+      return MAX (view_priv->next_presentation_time, 0);
+    }
 
-  compute_update_time (view_priv->refresh_rate,
-                       view_priv->last_presentation_time,
-                       view_priv->last_update_time,
-                       0,
-                       g_get_monotonic_time (),
-                       &next_presentation_time);
+  update_time = compute_update_time (view_priv->refresh_rate,
+                                     view_priv->last_presentation_time,
+                                     view_priv->last_update_time,
+                                     clutter_stage_view_is_vrr_active (view),
+                                     0,
+                                     g_get_monotonic_time (),
+                                     &next_presentation_time);
+  if (clutter_stage_view_is_vrr_active (view))
+    return update_time;
+
   if (next_presentation_time <= 0)
     return 0;
 
@@ -420,6 +443,7 @@ ensure_stage_update_time (ClutterStageCogl *stage_cogl,
     compute_update_time (fastest_priv ? fastest_priv->refresh_rate : 0.0,
                          fastest_priv ? fastest_priv->last_presentation_time : 0,
                          stage_cogl->last_update_time,
+                         fastest && clutter_stage_view_is_vrr_active (fastest),
                          stage_cogl->last_sync_delay,
                          now,
                          &stage_cogl->next_presentation_time);

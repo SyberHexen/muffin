@@ -88,4 +88,13 @@ CLUTTER_EXPORT
 int64_t clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
                                                        int64_t          *refresh_interval_out);
 
+/* Whether the view's monitor varies its refresh rate now: it shows a frame
+ * when one is ready instead of at a fixed rate */
+CLUTTER_EXPORT
+void clutter_stage_view_set_vrr_active (ClutterStageView *view,
+                                        gboolean          vrr_active);
+
+CLUTTER_EXPORT
+gboolean clutter_stage_view_is_vrr_active (ClutterStageView *view);
+
 #endif /* __CLUTTER_STAGE_VIEW_H__ */
