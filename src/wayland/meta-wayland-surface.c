@@ -44,6 +44,7 @@
 #include "wayland/meta-wayland-buffer.h"
 #include "wayland/meta-wayland-data-device.h"
 #include "wayland/meta-wayland-color-management.h"
+#include "wayland/meta-wayland-color-representation.h"
 #include "wayland/meta-wayland-fractional-scale.h"
 #include "wayland/meta-wayland-gtk-shell.h"
 #include "wayland/meta-wayland-layer-shell.h"
@@ -497,6 +498,10 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   state->has_new_color_description = FALSE;
   state->color_description = NULL;
 
+  state->has_new_color_representation = FALSE;
+  state->color_coefficients = 0;
+  state->color_range = 0;
+
   state->subsurface_placement_ops = NULL;
 }
 
@@ -640,6 +645,13 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
       to->has_new_color_description = TRUE;
     }
 
+  if (from->has_new_color_representation)
+    {
+      to->has_new_color_representation = TRUE;
+      to->color_coefficients = from->color_coefficients;
+      to->color_range = from->color_range;
+    }
+
   if (to->buffer && to->buffer_destroy_handler_id == 0)
     {
       to->buffer_destroy_handler_id =
@@ -720,6 +732,11 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
           g_clear_object (&surface->unassigned.buffer);
         }
     }
+
+  /* The coefficients and range a newly attached YUV buffer is converted
+   * with (wp_color_representation_v1) */
+  if (!meta_wayland_color_representation_commit (surface, state))
+    goto cleanup;
 
   if (state->newly_attached)
     {
@@ -1629,6 +1646,7 @@ wl_surface_destructor (struct wl_resource *resource)
   g_signal_emit (surface, surface_signals[SURFACE_DESTROY], 0);
 
   meta_wayland_color_management_surface_destroyed (surface);
+  meta_wayland_color_representation_surface_destroyed (surface);
 
   g_clear_object (&surface->scanout_candidate);
   g_clear_object (&surface->role);

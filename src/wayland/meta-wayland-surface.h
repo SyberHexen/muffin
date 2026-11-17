@@ -130,6 +130,11 @@ struct _MetaWaylandSurfaceState
   gboolean has_new_color_description;
   MetaWaylandColorDescription *color_description;
 
+  /* wp_color_representation_surface_v1; 0 unsets them */
+  gboolean has_new_color_representation;
+  uint32_t color_coefficients;
+  uint32_t color_range;
+
   GSList *subsurface_placement_ops;
 };
 
@@ -205,6 +210,13 @@ struct _MetaWaylandSurface
     /* Last preferred description announced to the feedback objects */
     uint64_t preferred_id;
   } color_management;
+
+  /* wp_color_representation_v1: as last committed, 0 if not set */
+  struct {
+    struct wl_resource *resource;
+    uint32_t coefficients;
+    uint32_t range;
+  } color_representation;
 
   /* Buffer renderer state. */
   gboolean buffer_held;
