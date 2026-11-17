@@ -215,7 +215,8 @@ meta_wayland_actor_surface_real_sync_actor_state (MetaWaylandActorSurface *actor
             meta_shaped_texture_set_color_snippet (stex, NULL);
           }
         meta_shaped_texture_set_content_peak (
-          stex, meta_wayland_color_description_get_content_peak (description));
+          stex, meta_wayland_color_description_get_content_peak (description,
+                                                                 surface));
       }
       meta_shaped_texture_set_is_y_inverted (stex, is_y_inverted);
       meta_shaped_texture_set_buffer_scale (stex, surface->scale);
