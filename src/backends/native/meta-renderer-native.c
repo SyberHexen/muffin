@@ -4344,9 +4344,11 @@ meta_renderer_native_reset_modes (MetaRendererNative *renderer_native)
 }
 
 /* What a GPU's connected monitors show: whether one is a built-in panel, and
- * the pixels per second of their preferred modes. Monitors on another GPU
- * than the primary one get each frame copied over, so the one that shows the
- * most is the one with the least to copy. */
+ * the pixels per second of the most demanding one's preferred mode. Frames
+ * for monitors on another GPU than the primary one are copied over, so
+ * compositing on the GPU of the most demanding monitor keeps that one free
+ * of copies; it's also the main one (a second, slower monitor added to the
+ * other GPU shouldn't move the compositing there). */
 static double
 get_gpu_display_load (MetaGpuKms *gpu_kms,
                       gboolean   *has_builtin_panel)
@@ -4390,8 +4392,8 @@ get_gpu_display_load (MetaGpuKms *gpu_kms,
         }
 
       if (mode->htotal && mode->vtotal)
-        load += mode->hdisplay * mode->vdisplay *
-                (mode->clock * 1000.0 / (mode->htotal * mode->vtotal));
+        load = MAX (load, mode->hdisplay * mode->vdisplay *
+                          (mode->clock * 1000.0 / (mode->htotal * mode->vtotal)));
     }
 
   return load;
@@ -4399,7 +4401,7 @@ get_gpu_display_load (MetaGpuKms *gpu_kms,
 
 /* The GPU the monitors are on: the one with the built-in panel (on a laptop,
  * an external monitor on the discrete GPU must not keep that one awake), or
- * else the one whose monitors show the most. NULL if no GPU stands out.
+ * else the one with the most demanding monitor. NULL if no GPU stands out.
  * This is preferred over the boot GPU, which is the one whose output the
  * firmware or boot loader last drew on: a boot loader's graphical menu can
  * make that the discrete GPU of a system set up to show everything on the
