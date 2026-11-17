@@ -202,6 +202,13 @@ struct _MetaWaylandSurface
   /* A buffer was committed and not drawn yet (frame callbacks wait) */
   gboolean frame_undrawn;
 
+  /* Content updates committed but not ready to be applied yet (waiting for
+   * their constraints), oldest first */
+  GQueue queued_updates;
+  /* When the oldest one started waiting */
+  int64_t queued_since_us;
+  GSource *queued_updates_source;
+
   /* wp_presentation */
   struct {
     /* Feedbacks of the last commit, waiting for it to be drawn */
@@ -374,6 +381,8 @@ gboolean            meta_wayland_surface_is_shortcuts_inhibited (MetaWaylandSurf
 CoglTexture *       meta_wayland_surface_get_texture (MetaWaylandSurface *surface);
 
 MetaSurfaceActor *  meta_wayland_surface_get_actor (MetaWaylandSurface *surface);
+
+void                meta_wayland_surface_process_queued_updates (MetaWaylandSurface *surface);
 
 void                meta_wayland_surface_notify_geometry_changed (MetaWaylandSurface *surface);
 
