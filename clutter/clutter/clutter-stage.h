@@ -126,6 +126,10 @@ struct _ClutterFrameInfo
   float refresh_rate;
   /* The view whose monitor presented the frame, if known */
   ClutterStageView *view;
+  /* The display's vertical retrace counter then (0 if unknown), and
+   * whether presentation_time comes from the display hardware */
+  int64_t sequence;
+  gboolean hw_clock;
 };
 
 typedef struct _ClutterCapture
