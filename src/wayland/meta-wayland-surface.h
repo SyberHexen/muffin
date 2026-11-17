@@ -192,6 +192,9 @@ struct _MetaWaylandSurface
     double sent_scale;
   } fractional_scale;
 
+  /* A buffer was committed and not drawn yet (frame callbacks wait) */
+  gboolean frame_undrawn;
+
   /* Buffer renderer state. */
   gboolean buffer_held;
 
