@@ -59,4 +59,11 @@ CoglScanout *
 meta_wayland_dma_buf_try_acquire_scanout (MetaWaylandDmaBufBuffer *dma_buf,
                                           CoglOnscreen            *onscreen);
 
+/* Implicit sync: add a sync_file's fence as a write fence of the buffer, and
+ * a sync_file of all its fences (what a writer would wait for); -1 if none */
+gboolean meta_wayland_dma_buf_import_sync_file (MetaWaylandDmaBufBuffer *dma_buf,
+                                                int                      sync_fd);
+
+int meta_wayland_dma_buf_export_sync_file (MetaWaylandDmaBufBuffer *dma_buf);
+
 #endif /* META_WAYLAND_DMA_BUF_H */
