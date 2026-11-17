@@ -53,6 +53,7 @@
 #include "wayland/meta-wayland-commit-timing.h"
 #include "wayland/meta-wayland-fifo.h"
 #include "wayland/meta-wayland-presentation-time.h"
+#include "wayland/meta-wayland-tearing-control.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-wayland-region.h"
 #include "wayland/meta-wayland-seat.h"
@@ -498,6 +499,9 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   state->has_target_time = FALSE;
   state->target_time_us = 0;
 
+  state->has_new_tearing_hint = FALSE;
+  state->tearing_async = FALSE;
+
   state->has_new_geometry = FALSE;
   state->has_acked_configure_serial = FALSE;
   state->has_new_min_size = FALSE;
@@ -579,6 +583,12 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
     {
       to->has_target_time = TRUE;
       to->target_time_us = from->target_time_us;
+    }
+
+  if (from->has_new_tearing_hint)
+    {
+      to->has_new_tearing_hint = TRUE;
+      to->tearing_async = from->tearing_async;
     }
 
   cairo_region_union (to->surface_damage, from->surface_damage);
@@ -1000,6 +1010,9 @@ cleanup:
 
   if (state->fifo_set_barrier)
     meta_wayland_fifo_set_barrier (surface, had_damage);
+
+  if (state->has_new_tearing_hint)
+    surface->tearing.async = state->tearing_async;
 
   meta_wayland_surface_state_reset (state);
 }
@@ -1896,6 +1909,7 @@ wl_surface_destructor (struct wl_resource *resource)
   clear_queued_updates (surface);
   meta_wayland_fifo_surface_destroyed (surface);
   meta_wayland_commit_timing_surface_destroyed (surface);
+  meta_wayland_tearing_control_surface_destroyed (surface);
 
   g_clear_handle_id (&surface->update_outputs_idle_id, g_source_remove);
   g_hash_table_foreach (surface->outputs_to_destroy_notify_id,
