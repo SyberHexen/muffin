@@ -107,7 +107,9 @@ frame_cb (CoglOnscreen  *onscreen,
   clutter_frame_info = (ClutterFrameInfo) {
     .frame_counter = global_frame_counter,
     .refresh_rate = cogl_frame_info_get_refresh_rate (frame_info),
-    .presentation_time = cogl_frame_info_get_presentation_time (frame_info)
+    .presentation_time = cogl_frame_info_get_presentation_time (frame_info),
+    .sequence = cogl_frame_info_get_sequence (frame_info),
+    .hw_clock = cogl_frame_info_get_hw_clock (frame_info),
   };
 
   _clutter_stage_cogl_view_presented (stage_cogl, frame_data->view,

@@ -146,6 +146,31 @@ cogl_frame_info_get_output (CoglFrameInfo *info);
 COGL_EXPORT
 int64_t cogl_frame_info_get_global_frame_counter (CoglFrameInfo *info);
 
+/**
+ * cogl_frame_info_get_sequence: (skip)
+ *
+ * Returns: the display's vertical retrace counter when the frame was
+ *   shown, 0 if unknown
+ */
+COGL_EXPORT
+int64_t cogl_frame_info_get_sequence (CoglFrameInfo *info);
+
+/**
+ * cogl_frame_info_get_hw_clock: (skip)
+ *
+ * Returns: whether the presentation time is the display hardware's
+ */
+COGL_EXPORT
+gboolean cogl_frame_info_get_hw_clock (CoglFrameInfo *info);
+
+/**
+ * cogl_frame_info_set_hw_timing: (skip)
+ */
+COGL_EXPORT
+void cogl_frame_info_set_hw_timing (CoglFrameInfo *info,
+                                    int64_t        sequence,
+                                    gboolean       hw_clock);
+
 G_END_DECLS
 
 #endif /* __COGL_FRAME_INFO_H */
