@@ -84,6 +84,9 @@ struct _MetaWindowActorX11
 
   /* A region that matches the shape of the window, including frame bounds */
   cairo_region_t *shape_region;
+  /* Whether the opaque region was last worked out for content that may be
+   * transparent (its buffers have an alpha channel), -1 if not yet */
+  int opaque_region_maybe_transparent;
   /* The region we should clip to when painting the shadow */
   cairo_region_t *shadow_clip;
   /* The frame region */
@@ -1100,6 +1103,7 @@ update_opaque_region (MetaWindowActorX11 *actor_x11)
   MetaSurfaceActor *surface;
 
   is_maybe_transparent = is_actor_maybe_transparent (actor_x11);
+  actor_x11->opaque_region_maybe_transparent = is_maybe_transparent;
   if (is_maybe_transparent && window->opaque_region)
     {
       cairo_rectangle_int_t client_area;
@@ -1219,6 +1223,16 @@ handle_updates (MetaWindowActorX11 *actor_x11)
 
   update_frame_bounds (actor_x11);
   check_needs_reshape (actor_x11);
+
+  /* The opaque region depends on whether the content has an alpha channel,
+   * which can change from one buffer to the next without a reshape: with
+   * Xwayland, a window shown through a child window without alpha (opaque)
+   * goes back to its own buffer, with alpha, when the child goes away. Kept
+   * opaque, it hides what's below while its content is transparent. */
+  if (actor_x11->opaque_region_maybe_transparent !=
+      is_actor_maybe_transparent (actor_x11))
+    update_opaque_region (actor_x11);
+
   check_needs_shadow (actor_x11);
 }
 
@@ -1678,4 +1692,5 @@ meta_window_actor_x11_init (MetaWindowActorX11 *self)
                               self);
 
   self->shadow_mode = user_shadow_mode;
+  self->opaque_region_maybe_transparent = -1;
 }
