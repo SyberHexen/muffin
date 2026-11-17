@@ -61,6 +61,12 @@ int64_t meta_renderer_native_get_frame_counter (MetaRendererNative *renderer_nat
 
 void meta_renderer_native_reset_modes (MetaRendererNative *renderer_native);
 
+void meta_renderer_native_hold_screen (MetaRendererNative *renderer_native);
+
+void meta_renderer_native_release_screen (MetaRendererNative *renderer_native);
+
+gboolean meta_renderer_native_is_screen_held (MetaRendererNative *renderer_native);
+
 gboolean meta_onscreen_native_is_buffer_scanout_compatible (CoglOnscreen *onscreen,
                                                             int           width,
                                                             int           height,
