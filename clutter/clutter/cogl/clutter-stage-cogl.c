@@ -238,6 +238,7 @@ _clutter_stage_cogl_view_presented (ClutterStageCogl *stage_cogl,
         stage_cogl->update_time = -1;
     }
 
+  frame_info->view = view;
   _clutter_stage_presented (stage_cogl->wrapper, frame_event, frame_info);
 }
 

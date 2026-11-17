@@ -124,6 +124,8 @@ struct _ClutterFrameInfo
   int64_t frame_counter;
   int64_t presentation_time;
   float refresh_rate;
+  /* The view whose monitor presented the frame, if known */
+  ClutterStageView *view;
 };
 
 typedef struct _ClutterCapture
