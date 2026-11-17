@@ -31,7 +31,9 @@
 #include "cogl/cogl.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -356,6 +358,10 @@ meta_kms_run_impl_task_sync (MetaKms              *kms,
   return ret;
 }
 
+/* The devices' file descriptors, kept by keep_last_frames_in_impl () */
+static int device_fds[8];
+static unsigned int n_device_fds;
+
 static gpointer
 keep_last_frames_in_impl (MetaKmsImpl  *impl,
                           gpointer      user_data,
@@ -372,6 +378,10 @@ keep_last_frames_in_impl (MetaKmsImpl  *impl,
 
       if (fd < 0)
         continue;
+
+      /* For keep_devices_open_after_exit (), outside the impl task */
+      if (n_device_fds < G_N_ELEMENTS (device_fds))
+        device_fds[n_device_fds++] = fd;
 
       for (k = meta_kms_device_get_crtcs (device); k; k = k->next)
         {
@@ -418,6 +428,56 @@ keep_last_frames_in_impl (MetaKmsImpl  *impl,
  *
  * Nothing may be drawn after this.
  */
+/* How long the devices stay open after Muffin has exited */
+#define KEEP_DEVICES_OPEN_S 3
+
+/*
+ * The frames left up stay on screen only while the devices stay open: when a
+ * device's last user closes it, the kernel puts its console framebuffer back
+ * up (drm_client_dev_restore ()), black, until the next display server (the
+ * login screen, or the session after it) takes the device and draws, a
+ * second or so later. The session's other users of the devices (Xwayland,
+ * applications) are mostly gone by then, so keep them open a moment longer
+ * from a child process, which holds nothing else and ignores the signals the
+ * session's processes are stopped with. It is no master of the devices: the
+ * session's master status goes when logind drops it, on the same files.
+ */
+static void
+keep_devices_open_after_exit (MetaKms *kms)
+{
+  struct sigaction ignore = { 0 };
+  long max_fd;
+  int fd;
+  unsigned int i;
+
+  if (n_device_fds == 0 || fork () != 0)
+    return;
+
+  /* The child: only async-signal-safe calls from here on */
+  ignore.sa_handler = SIG_IGN;
+  sigaction (SIGTERM, &ignore, NULL);
+  sigaction (SIGHUP, &ignore, NULL);
+  sigaction (SIGINT, &ignore, NULL);
+
+  max_fd = sysconf (_SC_OPEN_MAX);
+  if (max_fd < 0 || max_fd > 65536)
+    max_fd = 65536;
+
+  for (fd = 0; fd < max_fd; fd++)
+    {
+      gboolean keep = FALSE;
+
+      for (i = 0; i < n_device_fds; i++)
+        keep = keep || fd == device_fds[i];
+
+      if (!keep)
+        close (fd);
+    }
+
+  sleep (KEEP_DEVICES_OPEN_S);
+  _exit (0);
+}
+
 void
 meta_kms_prepare_shutdown (MetaKms *kms)
 {
@@ -426,6 +486,7 @@ meta_kms_prepare_shutdown (MetaKms *kms)
 
   kms->last_frames_kept = TRUE;
   meta_kms_run_impl_task_sync (kms, keep_last_frames_in_impl, kms, NULL);
+  keep_devices_open_after_exit (kms);
 }
 
 /* However Muffin exits: it also exits right away (exit ()) when it loses
