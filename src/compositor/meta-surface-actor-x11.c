@@ -62,11 +62,23 @@ struct _MetaSurfaceActorX11
   guint size_changed : 1;
 
   guint unredirected   : 1;
+
+  /* While the window is minimized, and after it's unminimized until its
+   * client draws (or a timeout), a copy of its last frame is shown */
+  CoglTexture *minimized_frame;
+  gboolean waiting_for_restore_draw;
+  guint restore_timeout_id;
 };
+
+/* How long an unminimized window keeps showing its last frame at most,
+ * waiting for its client to draw: Chromium-based clients take ~20 ms */
+#define RESTORE_DRAW_TIMEOUT_MS 300
 
 G_DEFINE_TYPE (MetaSurfaceActorX11,
                meta_surface_actor_x11,
                META_TYPE_SURFACE_ACTOR)
+
+static void show_live_frames (MetaSurfaceActorX11 *self);
 
 static void
 free_damage (MetaSurfaceActorX11 *self)
@@ -101,7 +113,8 @@ detach_pixmap (MetaSurfaceActorX11 *self)
    * you are supposed to be able to free a GLXPixmap after freeing the underlying
    * pixmap, but it certainly doesn't work with current DRI/Mesa
    */
-  meta_shaped_texture_set_texture (stex, NULL);
+  if (!self->minimized_frame)
+    meta_shaped_texture_set_texture (stex, NULL);
   cogl_flush ();
 
   meta_x11_error_trap_push (display->x11_display);
@@ -135,7 +148,8 @@ set_pixmap (MetaSurfaceActorX11 *self,
     g_warning ("NOTE: Not using GLX TFP!\n");
 
   self->texture = texture;
-  meta_shaped_texture_set_texture (stex, texture);
+  if (!self->minimized_frame)
+    meta_shaped_texture_set_texture (stex, texture);
 }
 
 static void
@@ -194,6 +208,10 @@ meta_surface_actor_x11_process_damage (MetaSurfaceActor *actor,
   MetaSurfaceActorX11 *self = META_SURFACE_ACTOR_X11 (actor);
 
   self->received_damage = TRUE;
+
+  /* The client drew after the window was unminimized */
+  if (self->waiting_for_restore_draw)
+    show_live_frames (self);
 
   if (meta_window_is_fullscreen (self->window) && !self->unredirected && !self->does_full_damage)
     {
@@ -309,6 +327,9 @@ meta_surface_actor_x11_is_unredirected (MetaSurfaceActorX11 *self)
 static void
 release_x11_resources (MetaSurfaceActorX11 *self)
 {
+  g_clear_handle_id (&self->restore_timeout_id, g_source_remove);
+  self->waiting_for_restore_draw = FALSE;
+  g_clear_pointer (&self->minimized_frame, cogl_object_unref);
   detach_pixmap (self);
   free_damage (self);
 }
@@ -368,7 +389,7 @@ reset_texture (MetaSurfaceActorX11 *self)
 {
   MetaShapedTexture *stex = meta_surface_actor_get_texture (META_SURFACE_ACTOR (self));
 
-  if (!self->texture)
+  if (!self->texture || self->minimized_frame)
     return;
 
   /* Setting the texture to NULL will cause all the FBO's cached by the
@@ -376,6 +397,120 @@ reset_texture (MetaSurfaceActorX11 *self)
    */
   meta_shaped_texture_set_texture (stex, NULL);
   meta_shaped_texture_set_texture (stex, self->texture);
+}
+
+/* A copy of what the window shows now (its pixmap's texture follows what
+ * the client draws, even without damage being processed) */
+static CoglTexture *
+copy_window_texture (CoglTexture *texture)
+{
+  CoglContext *ctx = clutter_backend_get_cogl_context (clutter_get_default_backend ());
+  int width = cogl_texture_get_width (texture);
+  int height = cogl_texture_get_height (texture);
+  CoglTexture2D *copy;
+  CoglOffscreen *offscreen;
+  CoglFramebuffer *framebuffer;
+  CoglPipeline *pipeline;
+  GError *error = NULL;
+
+  copy = cogl_texture_2d_new_with_size (ctx, width, height);
+  cogl_texture_set_components (COGL_TEXTURE (copy),
+                               cogl_texture_get_components (texture));
+  if (!cogl_texture_allocate (COGL_TEXTURE (copy), &error))
+    {
+      g_warning ("Failed to allocate a minimized window's frame: %s", error->message);
+      g_error_free (error);
+      cogl_object_unref (copy);
+      return NULL;
+    }
+
+  offscreen = cogl_offscreen_new_with_texture (COGL_TEXTURE (copy));
+  framebuffer = COGL_FRAMEBUFFER (offscreen);
+  if (!cogl_framebuffer_allocate (framebuffer, &error))
+    {
+      g_warning ("Failed to copy a minimized window's frame: %s", error->message);
+      g_error_free (error);
+      cogl_object_unref (offscreen);
+      cogl_object_unref (copy);
+      return NULL;
+    }
+
+  cogl_framebuffer_orthographic (framebuffer, 0, 0, width, height, 0, 1.0);
+  pipeline = cogl_pipeline_new (ctx);
+  cogl_pipeline_set_layer_texture (pipeline, 0, texture);
+  cogl_pipeline_set_blend (pipeline, "RGBA = ADD (SRC_COLOR, 0)", NULL);
+  cogl_framebuffer_draw_textured_rectangle (framebuffer, pipeline,
+                                            0, 0, width, height,
+                                            0, 0, 1, 1);
+  /* Before the client learns it's minimized and draws something else */
+  cogl_framebuffer_finish (framebuffer);
+
+  cogl_object_unref (pipeline);
+  cogl_object_unref (offscreen);
+
+  return COGL_TEXTURE (copy);
+}
+
+static void
+show_live_frames (MetaSurfaceActorX11 *self)
+{
+  MetaShapedTexture *stex = meta_surface_actor_get_texture (META_SURFACE_ACTOR (self));
+
+  g_clear_handle_id (&self->restore_timeout_id, g_source_remove);
+  self->waiting_for_restore_draw = FALSE;
+
+  if (!self->minimized_frame)
+    return;
+
+  meta_shaped_texture_set_texture (stex, self->texture);
+  g_clear_pointer (&self->minimized_frame, cogl_object_unref);
+  clutter_actor_queue_redraw (CLUTTER_ACTOR (self));
+}
+
+static gboolean
+restore_draw_timeout (gpointer user_data)
+{
+  MetaSurfaceActorX11 *self = user_data;
+
+  self->restore_timeout_id = 0;
+  show_live_frames (self);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* A minimized window shows a copy of its last frame: its preview (window
+ * list thumbnails, the minimize and unminimize animations) shows that
+ * frame and not what the client draws while it knows it's hidden (some
+ * clear their window then, Chromium-based ones paint it white). Once
+ * unminimized, it keeps showing it until the client draws again. */
+static void
+window_minimized_notify (MetaWindow *window,
+                         GParamSpec *pspec,
+                         gpointer    user_data)
+{
+  MetaSurfaceActorX11 *self = META_SURFACE_ACTOR_X11 (user_data);
+
+  if (window->minimized)
+    {
+      g_clear_handle_id (&self->restore_timeout_id, g_source_remove);
+      self->waiting_for_restore_draw = FALSE;
+
+      if (!self->minimized_frame && self->texture && !self->unredirected)
+        {
+          self->minimized_frame = copy_window_texture (self->texture);
+          if (self->minimized_frame)
+            meta_shaped_texture_set_texture (meta_surface_actor_get_texture (META_SURFACE_ACTOR (self)),
+                                             self->minimized_frame);
+        }
+    }
+  else if (self->minimized_frame && !self->waiting_for_restore_draw)
+    {
+      self->waiting_for_restore_draw = TRUE;
+      self->restore_timeout_id =
+        g_timeout_add (RESTORE_DRAW_TIMEOUT_MS, restore_draw_timeout, self);
+      g_source_set_name_by_id (self->restore_timeout_id,
+                               "[muffin] restore_draw_timeout");
+    }
 }
 
 MetaSurfaceActor *
@@ -395,6 +530,8 @@ meta_surface_actor_x11_new (MetaWindow *window)
   create_damage (self);
   g_signal_connect_object (self->window, "notify::decorated",
                            G_CALLBACK (window_decorated_notify), self, 0);
+  g_signal_connect_object (self->window, "notify::minimized",
+                           G_CALLBACK (window_minimized_notify), self, 0);
 
   g_signal_connect_object (meta_window_actor_from_window (window), "destroy",
                            G_CALLBACK (release_x11_resources), self,
