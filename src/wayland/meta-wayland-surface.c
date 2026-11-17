@@ -49,6 +49,7 @@
 #include "wayland/meta-wayland-keyboard.h"
 #include "wayland/meta-wayland-outputs.h"
 #include "wayland/meta-wayland-pointer.h"
+#include "wayland/meta-wayland-presentation-time.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-wayland-region.h"
 #include "wayland/meta-wayland-seat.h"
@@ -483,6 +484,7 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   state->surface_damage = cairo_region_create ();
   state->buffer_damage = cairo_region_create ();
   wl_list_init (&state->frame_callback_list);
+  wl_list_init (&state->presentation_feedback_list);
 
   state->has_new_geometry = FALSE;
   state->has_acked_configure_serial = FALSE;
@@ -511,6 +513,8 @@ meta_wayland_surface_state_clear (MetaWaylandSurfaceState *state)
 
   wl_list_for_each_safe (cb, next, &state->frame_callback_list, link)
     wl_resource_destroy (cb->resource);
+
+  meta_wayland_presentation_time_discard_list (&state->presentation_feedback_list);
 
   if (state->subsurface_placement_ops)
     {
@@ -547,6 +551,9 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
   to->dy = from->dy;
 
   wl_list_insert_list (&to->frame_callback_list, &from->frame_callback_list);
+  wl_list_insert_list (&to->presentation_feedback_list,
+                       &from->presentation_feedback_list);
+  wl_list_init (&from->presentation_feedback_list);
 
   cairo_region_union (to->surface_damage, from->surface_damage);
   cairo_region_union (to->buffer_damage, from->buffer_damage);
@@ -923,6 +930,10 @@ cleanup:
 
   if (surface->role)
     meta_wayland_surface_role_post_apply_state (surface->role, state);
+
+  meta_wayland_presentation_time_commit (surface,
+                                         &state->presentation_feedback_list,
+                                         had_damage);
 
   meta_wayland_surface_state_reset (state);
 }
@@ -1610,6 +1621,7 @@ wl_surface_destructor (struct wl_resource *resource)
     cairo_region_destroy (surface->input_region);
 
   meta_wayland_compositor_remove_frame_callback_surface (compositor, surface);
+  meta_wayland_presentation_time_surface_destroyed (surface);
 
   g_clear_handle_id (&surface->update_outputs_idle_id, g_source_remove);
   g_hash_table_foreach (surface->outputs_to_destroy_notify_id,
@@ -1882,6 +1894,8 @@ meta_wayland_surface_init (MetaWaylandSurface *surface)
   surface->pending_state = g_object_new (META_TYPE_WAYLAND_SURFACE_STATE, NULL);
 
   surface->buffer_ref = meta_wayland_buffer_ref_new ();
+
+  wl_list_init (&surface->presentation_time.feedback_list);
 
   surface->subsurface_branch_node = g_node_new (surface);
   surface->subsurface_leaf_node =
