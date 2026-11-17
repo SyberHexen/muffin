@@ -1771,7 +1771,8 @@ meta_monitor_manager_handle_get_current_state (MetaDBusDisplayConfig *skeleton,
       add_supported_values (&monitor_properties_builder,
                             "color-format", "supported-color-formats",
                             meta_monitor_get_color_format (monitor),
-                            meta_monitor_get_supported_color_formats (monitor));
+                            meta_monitor_get_color_formats_for_mode (monitor,
+                                                                     meta_monitor_get_current_mode (monitor)));
       if (meta_monitor_get_supported_color_modes (monitor))
         {
           GVariantBuilder modes_builder;
@@ -2248,7 +2249,7 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   if (g_variant_lookup (properties_variant, "color-format", "u", &color_format))
     {
       if (color_format > 31 ||
-          !(meta_monitor_get_supported_color_formats (monitor) &
+          !(meta_monitor_get_color_formats_for_mode (monitor, monitor_mode) &
             (1u << color_format)))
         {
           g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
@@ -2260,6 +2261,13 @@ create_monitor_config_from_variant (MetaMonitorManager *manager,
   else
     {
       color_format = meta_monitor_get_color_format (monitor);
+
+      /* A new mode the kept format isn't allowed in (YCbCr 4:2:0 is per
+       * mode): let the driver choose rather than have it refuse */
+      if (color_format != META_OUTPUT_COLOR_FORMAT_UNKNOWN &&
+          !(meta_monitor_get_color_formats_for_mode (monitor, monitor_mode) &
+            (1u << color_format)))
+        color_format = META_OUTPUT_COLOR_FORMAT_AUTO;
     }
 
   if (g_variant_lookup (properties_variant, "color-mode", "u", &color_mode))
@@ -3716,6 +3724,10 @@ meta_output_parse_edid (MetaOutput *output,
       output->edid_max_luminance = hdr.max_luminance;
       output->edid_max_frame_avg = hdr.max_frame_avg;
       output->edid_min_luminance = hdr.min_luminance;
+
+      g_clear_pointer (&output->edid_color_formats, g_free);
+      output->edid_color_formats =
+        decode_edid_color_formats (g_bytes_get_data (edid, &len), len);
     }
 
  out:

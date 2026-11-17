@@ -25,6 +25,7 @@
 
 #include "backends/meta-backend-private.h"
 #include "backends/meta-color-transform.h"
+#include "backends/edid.h"
 #include "backends/meta-crtc.h"
 #include "backends/meta-gpu.h"
 #include "backends/meta-monitor-manager-private.h"
@@ -360,6 +361,37 @@ unsigned int
 meta_monitor_get_supported_color_formats (MetaMonitor *monitor)
 {
   return meta_monitor_get_main_output (monitor)->supported_color_formats;
+}
+
+/* The color formats the output can send and the monitor's EDID allows in a
+ * mode: drivers refuse the others, or the monitor shows no picture. Without a
+ * mode or a usable EDID, all the output's. */
+unsigned int
+meta_monitor_get_color_formats_for_mode (MetaMonitor     *monitor,
+                                         MetaMonitorMode *mode)
+{
+  MetaOutput *output = meta_monitor_get_main_output (monitor);
+  const EdidColorFormats *edid = output->edid_color_formats;
+  MetaMonitorModeSpec *spec;
+  unsigned int allowed;
+
+  if (!mode || !edid)
+    return output->supported_color_formats;
+
+  allowed = (1u << META_OUTPUT_COLOR_FORMAT_AUTO) |
+            (1u << META_OUTPUT_COLOR_FORMAT_RGB);
+  if (edid->ycbcr444)
+    allowed |= 1u << META_OUTPUT_COLOR_FORMAT_YCBCR444;
+  if (edid->ycbcr422)
+    allowed |= 1u << META_OUTPUT_COLOR_FORMAT_YCBCR422;
+
+  spec = meta_monitor_mode_get_spec (mode);
+  if (edid_color_formats_allow_ycbcr420 (edid, spec->width, spec->height,
+                                         spec->refresh_rate,
+                                         spec->flags & META_CRTC_MODE_FLAG_INTERLACE))
+    allowed |= 1u << META_OUTPUT_COLOR_FORMAT_YCBCR420;
+
+  return output->supported_color_formats & allowed;
 }
 
 MetaOutputColorFormat

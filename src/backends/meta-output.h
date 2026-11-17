@@ -134,6 +134,9 @@ struct _MetaOutput
   gboolean has_edid_primaries;
   double edid_primaries[8];
 
+  /* What the EDID allows besides RGB; NULL without a usable EDID */
+  struct _EdidColorFormats *edid_color_formats;
+
   gpointer driver_private;
   GDestroyNotify driver_notify;
 

@@ -541,6 +541,232 @@ decode_edid (const uchar *edid)
     }
 }
 
+/* Every progressive CTA-861 video format (VIC) of at least 480 lines, with
+ * its exact refresh rate in mHz (generated from libdisplay-info 0.3.0's
+ * di_cta_video_format_from_vic (), CTA-861-I); 4:2:0 data blocks refer to
+ * modes by these numbers. */
+static const struct
+{
+  guint8 vic;
+  guint16 width, height;
+  guint32 mhz;
+} cta_vics[] = {
+    {   1,   640,  480,  59940 },    {   2,   720,  480,  59940 },    {   3,   720,  480,  59940 },
+    {   4,  1280,  720,  60000 },    {  14,  1440,  480,  59940 },    {  15,  1440,  480,  59940 },
+    {  16,  1920, 1080,  60000 },    {  17,   720,  576,  50000 },    {  18,   720,  576,  50000 },
+    {  19,  1280,  720,  50000 },    {  29,  1440,  576,  50000 },    {  30,  1440,  576,  50000 },
+    {  31,  1920, 1080,  50000 },    {  32,  1920, 1080,  24000 },    {  33,  1920, 1080,  25000 },
+    {  34,  1920, 1080,  30000 },    {  35,  2880,  480,  59940 },    {  36,  2880,  480,  59940 },
+    {  37,  2880,  576,  50000 },    {  38,  2880,  576,  50000 },    {  41,  1280,  720, 100000 },
+    {  42,   720,  576, 100000 },    {  43,   720,  576, 100000 },    {  47,  1280,  720, 120000 },
+    {  48,   720,  480, 119880 },    {  49,   720,  480, 119880 },    {  52,   720,  576, 200000 },
+    {  53,   720,  576, 200000 },    {  56,   720,  480, 239760 },    {  57,   720,  480, 239760 },
+    {  60,  1280,  720,  24000 },    {  61,  1280,  720,  25000 },    {  62,  1280,  720,  30000 },
+    {  63,  1920, 1080, 120000 },    {  64,  1920, 1080, 100000 },    {  65,  1280,  720,  24000 },
+    {  66,  1280,  720,  25000 },    {  67,  1280,  720,  30000 },    {  68,  1280,  720,  50000 },
+    {  69,  1280,  720,  60000 },    {  70,  1280,  720, 100000 },    {  71,  1280,  720, 120000 },
+    {  72,  1920, 1080,  24000 },    {  73,  1920, 1080,  25000 },    {  74,  1920, 1080,  30000 },
+    {  75,  1920, 1080,  50000 },    {  76,  1920, 1080,  60000 },    {  77,  1920, 1080, 100000 },
+    {  78,  1920, 1080, 120000 },    {  79,  1680,  720,  24000 },    {  80,  1680,  720,  25000 },
+    {  81,  1680,  720,  30000 },    {  82,  1680,  720,  50000 },    {  83,  1680,  720,  60000 },
+    {  84,  1680,  720, 100000 },    {  85,  1680,  720, 120000 },    {  86,  2560, 1080,  24000 },
+    {  87,  2560, 1080,  25000 },    {  88,  2560, 1080,  30000 },    {  89,  2560, 1080,  50000 },
+    {  90,  2560, 1080,  60000 },    {  91,  2560, 1080, 100000 },    {  92,  2560, 1080, 120000 },
+    {  93,  3840, 2160,  24000 },    {  94,  3840, 2160,  25000 },    {  95,  3840, 2160,  30000 },
+    {  96,  3840, 2160,  50000 },    {  97,  3840, 2160,  60000 },    {  98,  4096, 2160,  24000 },
+    {  99,  4096, 2160,  25000 },    { 100,  4096, 2160,  30000 },    { 101,  4096, 2160,  50000 },
+    { 102,  4096, 2160,  60000 },    { 103,  3840, 2160,  24000 },    { 104,  3840, 2160,  25000 },
+    { 105,  3840, 2160,  30000 },    { 106,  3840, 2160,  50000 },    { 107,  3840, 2160,  60000 },
+    { 108,  1280,  720,  48000 },    { 109,  1280,  720,  48000 },    { 110,  1680,  720,  48000 },
+    { 111,  1920, 1080,  48000 },    { 112,  1920, 1080,  48000 },    { 113,  2560, 1080,  48000 },
+    { 114,  3840, 2160,  48000 },    { 115,  4096, 2160,  48000 },    { 116,  3840, 2160,  48000 },
+    { 117,  3840, 2160, 100000 },    { 118,  3840, 2160, 120000 },    { 119,  3840, 2160, 100000 },
+    { 120,  3840, 2160, 120000 },    { 121,  5120, 2160,  24000 },    { 122,  5120, 2160,  25000 },
+    { 123,  5120, 2160,  30000 },    { 124,  5120, 2160,  48000 },    { 125,  5120, 2160,  50000 },
+    { 126,  5120, 2160,  60000 },    { 127,  5120, 2160, 100000 },    { 193,  5120, 2160, 120000 },
+    { 194,  7680, 4320,  24000 },    { 195,  7680, 4320,  25000 },    { 196,  7680, 4320,  30000 },
+    { 197,  7680, 4320,  48000 },    { 198,  7680, 4320,  50000 },    { 199,  7680, 4320,  60000 },
+    { 200,  7680, 4320, 100000 },    { 201,  7680, 4320, 120000 },    { 202,  7680, 4320,  24000 },
+    { 203,  7680, 4320,  25000 },    { 204,  7680, 4320,  30000 },    { 205,  7680, 4320,  48000 },
+    { 206,  7680, 4320,  50000 },    { 207,  7680, 4320,  60000 },    { 208,  7680, 4320, 100000 },
+    { 209,  7680, 4320, 120000 },    { 210, 10240, 4320,  24000 },    { 211, 10240, 4320,  25000 },
+    { 212, 10240, 4320,  30000 },    { 213, 10240, 4320,  48000 },    { 214, 10240, 4320,  50000 },
+    { 215, 10240, 4320,  60000 },    { 216, 10240, 4320, 100000 },    { 217, 10240, 4320, 120000 },
+    { 218,  4096, 2160, 100000 },    { 219,  4096, 2160, 120000 },
+};
+
+static gboolean
+vic_matches_mode (unsigned int vic,
+                  int          width,
+                  int          height,
+                  float        refresh_rate)
+{
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (cta_vics); i++)
+    {
+      double hz;
+
+      if (cta_vics[i].vic != vic)
+        continue;
+      if (width != cta_vics[i].width || height != cta_vics[i].height)
+        return FALSE;
+
+      /* A VIC covers both its integer rate and the 1000/1001 one */
+      hz = cta_vics[i].mhz / 1000.0;
+      return fabs (refresh_rate - hz) < 0.5 ||
+             fabs (refresh_rate - hz * 1000.0 / 1001.0) < 0.5 ||
+             fabs (refresh_rate - hz * 1001.0 / 1000.0) < 0.5;
+    }
+
+  return FALSE;
+}
+
+static gboolean
+valid_vic (unsigned int vic)
+{
+  return (vic >= 1 && vic <= 127) || (vic >= 193 && vic <= 219);
+}
+
+/* A collection of CTA-861 data blocks: from a CTA extension, or embedded in a
+ * DisplayID CTA data block */
+static void
+decode_cta_color_blocks (const uchar      *p,
+                         unsigned int      len,
+                         EdidColorFormats *out)
+{
+  unsigned int pos = 0;
+
+  while (pos < len)
+    {
+      unsigned int tag = p[pos] >> 5;
+      unsigned int length = p[pos] & 0x1f;
+      const uchar *data = p + pos + 1;
+      unsigned int i;
+
+      if (pos + 1 + length > len)
+        break;
+
+      if (tag == 2)
+        {
+          /* video data block: the SVDs of all of them are numbered together,
+           * skipping invalid VICs */
+          for (i = 0; i < length; i++)
+            {
+              unsigned int vic = data[i];
+
+              if (vic >= 129 && vic <= 192)    /* native flag */
+                vic &= 0x7f;
+              if (valid_vic (vic) && out->n_svds < G_N_ELEMENTS (out->svds))
+                out->svds[out->n_svds++] = vic;
+            }
+        }
+      else if (tag == 7 && length >= 1 && data[0] == 0x0e)
+        {
+          /* 4:2:0 video data block: modes sent only as 4:2:0 */
+          for (i = 1; i < length; i++)
+            {
+              if (out->n_y420_vdb < G_N_ELEMENTS (out->y420_vdb))
+                out->y420_vdb[out->n_y420_vdb++] = data[i];
+            }
+        }
+      else if (tag == 7 && length >= 1 && data[0] == 0x0f)
+        {
+          /* 4:2:0 capability map over the SVDs; an empty one means all */
+          if (length == 1)
+            out->y420_cmdb_map = G_MAXUINT64;
+          for (i = 1; i < length && i <= 8; i++)
+            out->y420_cmdb_map |= (guint64) data[i] << (8 * (i - 1));
+        }
+
+      pos += 1 + length;
+    }
+}
+
+EdidColorFormats *
+decode_edid_color_formats (const uchar *edid,
+                           gsize        len)
+{
+  EdidColorFormats *out;
+  gsize n_blocks, b;
+
+  if (!edid || len < 128)
+    return NULL;
+
+  out = g_new0 (EdidColorFormats, 1);
+
+  /* EDID 1.4 digital displays declare YCbCr 4:4:4 and 4:2:2 in the base
+   * block */
+  if ((edid[20] & 0x80) && edid[18] == 1 && edid[19] >= 4)
+    {
+      unsigned int encodings = (edid[24] >> 3) & 3;
+
+      out->ycbcr444 |= (encodings & 1) != 0;
+      out->ycbcr422 |= (encodings & 2) != 0;
+    }
+
+  n_blocks = MIN ((gsize) edid[126], len / 128 - 1);
+  for (b = 1; b <= n_blocks; b++)
+    {
+      const uchar *x = edid + 128 * b;
+
+      if (x[0] == 0x02)                         /* CTA-861 extension */
+        {
+          out->ycbcr444 |= (x[3] & 0x20) != 0;
+          out->ycbcr422 |= (x[3] & 0x10) != 0;
+          if (x[2] >= 4)
+            decode_cta_color_blocks (x + 4, MIN (x[2], 127) - 4, out);
+        }
+      else if (x[0] == 0x70)                    /* DisplayID extension */
+        {
+          unsigned int end = MIN (5u + x[2], 127u);
+          unsigned int pos = 5;
+
+          while (pos + 3 <= end)
+            {
+              unsigned int tag = x[pos], length = x[pos + 2];
+
+              if (pos + 3 + length > end)
+                break;
+              if (tag == 0x81)                  /* CTA DisplayID block */
+                decode_cta_color_blocks (x + pos + 3, length, out);
+              pos += 3 + length;
+            }
+        }
+    }
+
+  return out;
+}
+
+gboolean
+edid_color_formats_allow_ycbcr420 (const EdidColorFormats *formats,
+                                   int                     width,
+                                   int                     height,
+                                   float                   refresh_rate,
+                                   gboolean                interlaced)
+{
+  unsigned int i;
+
+  /* 4:2:0 is defined for progressive modes only */
+  if (interlaced)
+    return FALSE;
+
+  for (i = 0; i < formats->n_y420_vdb; i++)
+    {
+      if (vic_matches_mode (formats->y420_vdb[i], width, height, refresh_rate))
+        return TRUE;
+    }
+
+  for (i = 0; i < formats->n_svds && i < 64; i++)
+    {
+      if ((formats->y420_cmdb_map & ((guint64) 1 << i)) &&
+          vic_matches_mode (formats->svds[i], width, height, refresh_rate))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 /* The HDR static metadata data block (CTA-861.3) of the CTA-861 extension
  * blocks, if any */
 gboolean
