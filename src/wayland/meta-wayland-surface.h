@@ -196,6 +196,9 @@ struct _MetaWaylandSurface
   /* wp_linux_drm_syncobj_v1 */
   MetaWaylandSyncobjSurface *drm_syncobj;
 
+  /* A buffer was committed and not drawn yet (frame callbacks wait) */
+  gboolean frame_undrawn;
+
   /* Buffer renderer state. */
   gboolean buffer_held;
 

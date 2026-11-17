@@ -697,6 +697,9 @@ meta_wayland_surface_apply_state (MetaWaylandSurface      *surface,
 
   g_signal_emit (surface, surface_signals[SURFACE_PRE_STATE_APPLIED], 0);
 
+  if (state->newly_attached)
+    surface->frame_undrawn = TRUE;
+
   if (surface->role)
     {
       meta_wayland_surface_role_pre_apply_state (surface->role, state);
