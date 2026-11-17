@@ -2906,6 +2906,11 @@ meta_renderer_native_create_surface_gbm (CoglOnscreen        *onscreen,
           goto fallback;
         }
 
+      /* Only the APIs Muffin renders with: not OpenGL ES 1, which Mesa's
+       * 8-bit configs offer and its 10-bit ones (radeonsi) don't, so
+       * requiring it would rule all of them out */
+      renderable_type &= ~EGL_OPENGL_ES_BIT;
+
       for (i = 0; i < G_N_ELEMENTS (deep_formats); i++)
         {
           EGLConfig config;
