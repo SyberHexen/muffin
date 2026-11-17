@@ -34,6 +34,7 @@ struct _MetaKmsUpdate
   GList *plane_assignments;
   GList *page_flips;
   GList *connector_properties;
+  GList *crtc_properties;
   GList *crtc_gammas;
 };
 
@@ -248,6 +249,26 @@ meta_kms_update_set_connector_property (MetaKmsUpdate    *update,
                                                  prop);
 }
 
+void
+meta_kms_update_set_crtc_property (MetaKmsUpdate *update,
+                                   MetaKmsCrtc   *crtc,
+                                   uint32_t       prop_id,
+                                   uint64_t       value)
+{
+  MetaKmsCrtcProperty *prop;
+
+  g_assert (!meta_kms_update_is_sealed (update));
+
+  prop = g_new0 (MetaKmsCrtcProperty, 1);
+  *prop = (MetaKmsCrtcProperty) {
+    .crtc = crtc,
+    .prop_id = prop_id,
+    .value = value,
+  };
+
+  update->crtc_properties = g_list_prepend (update->crtc_properties, prop);
+}
+
 static void
 meta_kms_crtc_gamma_free (MetaKmsCrtcGamma *gamma)
 {
@@ -401,6 +422,12 @@ meta_kms_update_get_connector_properties (MetaKmsUpdate *update)
 }
 
 GList *
+meta_kms_update_get_crtc_properties (MetaKmsUpdate *update)
+{
+  return update->crtc_properties;
+}
+
+GList *
 meta_kms_update_get_crtc_gammas (MetaKmsUpdate *update)
 {
   return update->crtc_gammas;
@@ -433,6 +460,7 @@ meta_kms_update_free (MetaKmsUpdate *update)
                     (GDestroyNotify) meta_kms_mode_set_free);
   g_list_free_full (update->page_flips, g_free);
   g_list_free_full (update->connector_properties, g_free);
+  g_list_free_full (update->crtc_properties, g_free);
   g_list_free_full (update->crtc_gammas, (GDestroyNotify) meta_kms_crtc_gamma_free);
 
   g_free (update);
