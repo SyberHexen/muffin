@@ -962,6 +962,180 @@ meta_wayland_surface_ensure_cached_state (MetaWaylandSurface *surface)
   return surface->cached_state;
 }
 
+/* A content update waits at most this long for its constraints, so a
+ * client always makes progress */
+#define MAX_UPDATE_WAIT_US (100 * G_USEC_PER_SEC / 1000)
+
+/* Constraints only hold for a surface being drawn: one that isn't shown
+ * (minimized, offscreen, not mapped yet) has its updates applied at once */
+static gboolean
+surface_takes_update_constraints (MetaWaylandSurface *surface)
+{
+  MetaSurfaceActor *actor = meta_wayland_surface_get_actor (surface);
+
+  return actor &&
+         clutter_actor_is_mapped (CLUTTER_ACTOR (actor)) &&
+         clutter_actor_peek_stage_views (CLUTTER_ACTOR (actor));
+}
+
+/* Whether a content update can be applied now; if not, @wake_up_us is
+ * lowered to when it should be checked again, if that's known */
+static gboolean
+update_is_ready (MetaWaylandSurface      *surface,
+                 MetaWaylandSurfaceState *state,
+                 int64_t                  now_us,
+                 int64_t                 *wake_up_us)
+{
+  if (!surface_takes_update_constraints (surface))
+    return TRUE;
+
+  return TRUE;
+}
+
+static gboolean
+queued_updates_source_dispatch (GSource     *source,
+                                GSourceFunc  callback,
+                                gpointer     user_data)
+{
+  g_source_set_ready_time (source, -1);
+
+  return callback (user_data);
+}
+
+static GSourceFuncs queued_updates_source_funcs = {
+  .dispatch = queued_updates_source_dispatch,
+};
+
+static gboolean
+queued_updates_wake_up (gpointer user_data)
+{
+  MetaWaylandSurface *surface = user_data;
+
+  meta_wayland_surface_process_queued_updates (surface);
+
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+schedule_queued_updates_wake_up (MetaWaylandSurface *surface,
+                                 int64_t             wake_up_us)
+{
+  if (!surface->queued_updates_source)
+    {
+      GSource *source;
+
+      source = g_source_new (&queued_updates_source_funcs, sizeof (GSource));
+      g_source_set_priority (source, G_PRIORITY_HIGH);
+      g_source_set_callback (source, queued_updates_wake_up, surface, NULL);
+      g_source_set_ready_time (source, -1);
+      g_source_attach (source, NULL);
+      surface->queued_updates_source = source;
+    }
+
+  g_source_set_ready_time (surface->queued_updates_source, wake_up_us);
+}
+
+static void
+clear_queued_updates (MetaWaylandSurface *surface)
+{
+  MetaWaylandCompositor *compositor = surface->compositor;
+
+  g_queue_clear_full (&surface->queued_updates, g_object_unref);
+  compositor->queued_update_surfaces =
+    g_list_remove (compositor->queued_update_surfaces, surface);
+
+  if (surface->queued_updates_source)
+    {
+      g_source_destroy (surface->queued_updates_source);
+      g_clear_pointer (&surface->queued_updates_source, g_source_unref);
+    }
+}
+
+/**
+ * meta_wayland_surface_process_queued_updates:
+ *
+ * Applies the content updates waiting for their constraints that are ready
+ * now, in the order they were committed.
+ */
+void
+meta_wayland_surface_process_queued_updates (MetaWaylandSurface *surface)
+{
+  MetaWaylandCompositor *compositor = surface->compositor;
+  int64_t now_us = g_get_monotonic_time ();
+
+  g_object_ref (surface);
+
+  while (!g_queue_is_empty (&surface->queued_updates))
+    {
+      MetaWaylandSurfaceState *state = g_queue_peek_head (&surface->queued_updates);
+      int64_t wake_up_us = surface->queued_since_us + MAX_UPDATE_WAIT_US;
+
+      if (now_us < wake_up_us &&
+          !update_is_ready (surface, state, now_us, &wake_up_us))
+        {
+          schedule_queued_updates_wake_up (surface, wake_up_us);
+          break;
+        }
+
+      g_queue_pop_head (&surface->queued_updates);
+      surface->queued_since_us = now_us;
+      meta_wayland_surface_apply_state (surface, state);
+      g_object_unref (state);
+    }
+
+  if (g_queue_is_empty (&surface->queued_updates))
+    {
+      compositor->queued_update_surfaces =
+        g_list_remove (compositor->queued_update_surfaces, surface);
+      if (surface->queued_updates_source)
+        g_source_set_ready_time (surface->queued_updates_source, -1);
+    }
+
+  g_object_unref (surface);
+}
+
+/* The buffer of a held back update was destroyed before the update was
+ * applied (a Vulkan swapchain being replaced does that): drop the attach,
+ * so the surface keeps what it shows instead of being unmapped */
+static void
+queued_buffer_resource_destroyed (MetaWaylandBuffer       *buffer,
+                                  MetaWaylandSurfaceState *state)
+{
+  g_clear_signal_handler (&state->buffer_destroy_handler_id, buffer);
+  state->buffer = NULL;
+  state->newly_attached = FALSE;
+}
+
+static void
+queue_pending_update (MetaWaylandSurface *surface)
+{
+  MetaWaylandCompositor *compositor = surface->compositor;
+  MetaWaylandSurfaceState *state;
+
+  state = g_object_new (META_TYPE_WAYLAND_SURFACE_STATE, NULL);
+  meta_wayland_surface_state_merge_into (surface->pending_state, state);
+
+  if (state->buffer)
+    {
+      g_clear_signal_handler (&state->buffer_destroy_handler_id,
+                              state->buffer);
+      state->buffer_destroy_handler_id =
+        g_signal_connect (state->buffer, "resource-destroyed",
+                          G_CALLBACK (queued_buffer_resource_destroyed),
+                          state);
+    }
+
+  if (g_queue_is_empty (&surface->queued_updates))
+    {
+      surface->queued_since_us = g_get_monotonic_time ();
+      compositor->queued_update_surfaces =
+        g_list_prepend (compositor->queued_update_surfaces, surface);
+    }
+  g_queue_push_tail (&surface->queued_updates, state);
+
+  meta_wayland_surface_process_queued_updates (surface);
+}
+
 static void
 meta_wayland_surface_commit (MetaWaylandSurface *surface)
 {
@@ -991,7 +1165,15 @@ meta_wayland_surface_commit (MetaWaylandSurface *surface)
     }
   else
     {
-      meta_wayland_surface_apply_state (surface, surface->pending_state);
+      int64_t wake_up_us = -1;
+
+      /* An update waits for its constraints, and behind the ones before it */
+      if (!g_queue_is_empty (&surface->queued_updates) ||
+          !update_is_ready (surface, pending, g_get_monotonic_time (),
+                            &wake_up_us))
+        queue_pending_update (surface);
+      else
+        meta_wayland_surface_apply_state (surface, surface->pending_state);
     }
 }
 
@@ -1622,6 +1804,7 @@ wl_surface_destructor (struct wl_resource *resource)
 
   meta_wayland_compositor_remove_frame_callback_surface (compositor, surface);
   meta_wayland_presentation_time_surface_destroyed (surface);
+  clear_queued_updates (surface);
 
   g_clear_handle_id (&surface->update_outputs_idle_id, g_source_remove);
   g_hash_table_foreach (surface->outputs_to_destroy_notify_id,
@@ -1896,6 +2079,7 @@ meta_wayland_surface_init (MetaWaylandSurface *surface)
   surface->buffer_ref = meta_wayland_buffer_ref_new ();
 
   wl_list_init (&surface->presentation_time.feedback_list);
+  g_queue_init (&surface->queued_updates);
 
   surface->subsurface_branch_node = g_node_new (surface);
   surface->subsurface_leaf_node =

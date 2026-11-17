@@ -267,10 +267,39 @@ frame_callbacks_due (MetaWaylandSurface *surface,
 static void emit_frame_callbacks (MetaWaylandCompositor *compositor,
                                   gboolean               after_paint);
 
+/* Content updates waiting for their constraints may be ready after a paint
+ * or a frame shown */
+static void
+process_queued_updates (MetaWaylandCompositor *compositor)
+{
+  GList *surfaces, *l;
+
+  if (!compositor->queued_update_surfaces)
+    return;
+
+  surfaces = g_list_copy_deep (compositor->queued_update_surfaces,
+                               (GCopyFunc) g_object_ref, NULL);
+  for (l = surfaces; l; l = l->next)
+    meta_wayland_surface_process_queued_updates (l->data);
+  g_list_free_full (surfaces, g_object_unref);
+}
+
+static gboolean
+process_queued_updates_idle (gpointer user_data)
+{
+  MetaWaylandCompositor *compositor = user_data;
+
+  compositor->queued_updates_idle_id = 0;
+  process_queued_updates (compositor);
+
+  return G_SOURCE_REMOVE;
+}
+
 void
 meta_wayland_compositor_paint_finished (MetaWaylandCompositor *compositor)
 {
   meta_wayland_presentation_time_after_paint (compositor);
+  process_queued_updates (compositor);
   emit_frame_callbacks (compositor, TRUE);
 }
 
@@ -290,6 +319,13 @@ emit_held_frame_callbacks (gpointer user_data)
 void
 meta_wayland_compositor_frame_completed (MetaWaylandCompositor *compositor)
 {
+  /* Once the view's pending frame is cleared, as for frame callbacks */
+  if (compositor->queued_update_surfaces &&
+      !compositor->queued_updates_idle_id)
+    compositor->queued_updates_idle_id =
+      g_idle_add_full (G_PRIORITY_HIGH, process_queued_updates_idle,
+                       compositor, NULL);
+
   if (!compositor->frame_callbacks_held ||
       compositor->held_frame_callbacks_idle_id)
     return;
