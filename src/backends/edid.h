@@ -188,6 +188,32 @@ struct MonitorInfo
   char		dsc_string[14];		/* Unspecified ASCII data */
 };
 
+/* What an EDID allows besides RGB, read as the kernel reads it (drm_edid.c):
+ * YCbCr 4:4:4 and 4:2:2 from an EDID 1.4 digital base block or a CTA-861
+ * extension header; YCbCr 4:2:0 per mode, from the 4:2:0 video data blocks
+ * and the 4:2:0 capability map over the video data blocks' modes (VICs), of
+ * CTA extensions and of CTA blocks in DisplayID extensions */
+typedef struct _EdidColorFormats
+{
+  gboolean ycbcr444;
+  gboolean ycbcr422;
+  uchar svds[64];
+  unsigned int n_svds;
+  guint64 y420_cmdb_map;
+  uchar y420_vdb[64];
+  unsigned int n_y420_vdb;
+} EdidColorFormats;
+
+/* NULL without a usable EDID; free with g_free () */
+EdidColorFormats * decode_edid_color_formats (const uchar *edid,
+                                              gsize        len);
+
+gboolean edid_color_formats_allow_ycbcr420 (const EdidColorFormats *formats,
+                                            int                     width,
+                                            int                     height,
+                                            float                   refresh_rate,
+                                            gboolean                interlaced);
+
 MonitorInfo *decode_edid (const uchar *data);
 
 #endif

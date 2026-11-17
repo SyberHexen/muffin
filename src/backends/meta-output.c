@@ -111,6 +111,7 @@ meta_output_finalize (GObject *object)
   g_free (output->vendor);
   g_free (output->product);
   g_free (output->serial);
+  g_free (output->edid_color_formats);
   g_free (output->modes);
   g_free (output->possible_crtcs);
   g_free (output->possible_clones);

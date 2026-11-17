@@ -111,6 +111,9 @@ struct _MetaOutput
   MetaOutputColorFormat color_format;
   unsigned int supported_color_formats;
 
+  /* What the EDID allows besides RGB; NULL without a usable EDID */
+  struct _EdidColorFormats *edid_color_formats;
+
   gpointer driver_private;
   GDestroyNotify driver_notify;
 

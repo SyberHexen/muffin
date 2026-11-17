@@ -134,6 +134,9 @@ MetaOutputRGBRange meta_monitor_get_rgb_range (MetaMonitor *monitor);
 
 unsigned int meta_monitor_get_supported_color_formats (MetaMonitor *monitor);
 
+unsigned int meta_monitor_get_color_formats_for_mode (MetaMonitor     *monitor,
+                                                      MetaMonitorMode *mode);
+
 MetaOutputColorFormat meta_monitor_get_color_format (MetaMonitor *monitor);
 
 META_EXPORT_TEST
