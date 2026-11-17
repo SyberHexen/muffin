@@ -334,6 +334,37 @@ queue_send_frame_messages_timeout (MetaWindowActorX11 *actor_x11)
                            "[muffin] send_frame_messages_timeout");
 }
 
+/* Whether a monitor the window is on is drawn in this stage update: each
+ * monitor is drawn on its own refresh cycle, and the window's frames are
+ * drawn (and shown) with its monitors' */
+static gboolean
+is_painted_this_frame (MetaWindowActorX11 *actor_x11)
+{
+  GList *views = clutter_actor_peek_stage_views (CLUTTER_ACTOR (actor_x11));
+  GList *l;
+
+  if (!views)
+    return TRUE;
+
+  for (l = views; l; l = l->next)
+    {
+      if (clutter_stage_view_was_painted (l->data))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
+/* Whether a frame shown on @view shows the window */
+static gboolean
+is_on_view (MetaWindowActorX11 *actor_x11,
+            ClutterStageView   *view)
+{
+  GList *views = clutter_actor_peek_stage_views (CLUTTER_ACTOR (actor_x11));
+
+  return !view || !views || g_list_find (views, view);
+}
+
 static void
 assign_frame_counter_to_frames (MetaWindowActorX11 *actor_x11)
 {
@@ -347,6 +378,9 @@ assign_frame_counter_to_frames (MetaWindowActorX11 *actor_x11)
    * frame messages in a timeout, rather than in this paint cycle.
    */
   if (actor_x11->send_frame_messages_timer != 0)
+    return;
+
+  if (!is_painted_this_frame (actor_x11))
     return;
 
   for (l = actor_x11->frames; l; l = l->next)
@@ -367,6 +401,9 @@ meta_window_actor_x11_frame_complete (MetaWindowActor  *actor,
   GList *l;
 
   if (meta_window_actor_is_destroyed (actor))
+    return;
+
+  if (!is_on_view (actor_x11, frame_info->view))
     return;
 
   for (l = actor_x11->frames; l;)
@@ -1320,10 +1357,14 @@ meta_window_actor_x11_post_paint (MetaWindowActor *actor)
   MetaWindowActorX11 *actor_x11 = META_WINDOW_ACTOR_X11 (actor);
   MetaWindow *window;
 
-  actor_x11->repaint_scheduled = FALSE;
-
   if (meta_window_actor_is_destroyed (actor))
     return;
+
+  /* Its monitors weren't drawn this time: its frame is still to be drawn */
+  if (!is_painted_this_frame (actor_x11))
+    return;
+
+  actor_x11->repaint_scheduled = FALSE;
 
   /* If the window had damage, but wasn't actually redrawn because
    * it is obscured, we should wait until timer expiration before
