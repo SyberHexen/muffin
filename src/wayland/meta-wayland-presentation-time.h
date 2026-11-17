@@ -37,6 +37,8 @@ void meta_wayland_presentation_time_commit (MetaWaylandSurface *surface,
 
 void meta_wayland_presentation_time_surface_destroyed (MetaWaylandSurface *surface);
 
+ClutterStageView * meta_wayland_presentation_time_get_main_view (MetaWaylandSurface *surface);
+
 /* After a redraw: the feedbacks of surfaces whose main view was drawn wait
  * for that view's frame */
 void meta_wayland_presentation_time_after_paint (MetaWaylandCompositor *compositor);
