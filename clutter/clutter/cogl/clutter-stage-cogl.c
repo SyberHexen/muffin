@@ -207,6 +207,15 @@ view_schedule_update (ClutterStageCogl *stage_cogl,
   if (!view_priv || view_priv->update_time != -1)
     return;
 
+  /* A view that tears shows its frames as soon as they're drawn: no
+   * rhythm to wait for */
+  if (clutter_stage_view_is_tearing (view))
+    {
+      view_priv->update_time = now;
+      view_priv->next_presentation_time = now;
+      return;
+    }
+
   view_priv->update_time =
     compute_update_time (view_priv->refresh_rate,
                          view_priv->last_presentation_time,
@@ -241,6 +250,10 @@ clutter_stage_view_get_next_presentation_time (ClutterStageView *view,
   refresh_interval = (int64_t) (0.5 + G_USEC_PER_SEC / view_priv->refresh_rate);
   if (refresh_interval_out)
     *refresh_interval_out = refresh_interval;
+
+  /* A view that tears shows its next frame as soon as it's drawn */
+  if (clutter_stage_view_is_tearing (view))
+    return g_get_monotonic_time ();
 
   /* Its next frame is timed already; with VRR it is shown about as soon as
    * it's drawn */

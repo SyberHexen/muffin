@@ -116,6 +116,10 @@ struct _MetaWaylandSurfaceState
   gboolean has_target_time;
   int64_t target_time_us;
 
+  /* wp_tearing_control_v1 */
+  gboolean has_new_tearing_hint;
+  gboolean tearing_async;
+
   MetaRectangle new_geometry;
   gboolean has_new_geometry;
 
@@ -223,6 +227,13 @@ struct _MetaWaylandSurface
   struct {
     struct wl_resource *resource;
   } commit_timing;
+
+  /* wp_tearing_control_v1 */
+  struct {
+    struct wl_resource *resource;
+    /* Its frames may be shown at once instead of at the vertical blank */
+    gboolean async;
+  } tearing;
 
   /* Content updates committed but not ready to be applied yet (waiting for
    * their constraints), oldest first */
