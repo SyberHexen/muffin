@@ -24,6 +24,7 @@
 
 #include <errno.h>
 #include <gbm.h>
+#include <string.h>
 #include <xf86drmMode.h>
 
 #include "backends/native/meta-kms-connector.h"
@@ -72,6 +73,64 @@ meta_kms_impl_simple_new (MetaKms  *kms,
                        NULL);
 }
 
+/* Whether a connector property already has @value, comparing blobs by their
+ * contents. Setting a property re-sends what goes with it (an HDR infoframe
+ * for the HDR metadata) even when nothing changes, which some displays
+ * (TVs) show as a flash; and a display server taking over from another (a
+ * login screen) sets the same values again. */
+static gboolean
+connector_property_is_current (int      fd,
+                               uint32_t connector_id,
+                               uint32_t prop_id,
+                               uint64_t value)
+{
+  drmModeObjectProperties *props;
+  gboolean is_current = FALSE;
+  uint32_t i;
+
+  props = drmModeObjectGetProperties (fd, connector_id,
+                                      DRM_MODE_OBJECT_CONNECTOR);
+  if (!props)
+    return FALSE;
+
+  for (i = 0; i < props->count_props; i++)
+    {
+      drmModePropertyRes *prop;
+      uint64_t current = props->prop_values[i];
+
+      if (props->props[i] != prop_id)
+        continue;
+
+      if (current == value)
+        {
+          is_current = TRUE;
+          break;
+        }
+
+      prop = drmModeGetProperty (fd, prop_id);
+      if (prop && (prop->flags & DRM_MODE_PROP_BLOB) && current && value)
+        {
+          drmModePropertyBlobRes *current_blob =
+            drmModeGetPropertyBlob (fd, current);
+          drmModePropertyBlobRes *new_blob =
+            drmModeGetPropertyBlob (fd, value);
+
+          is_current = current_blob && new_blob &&
+                       current_blob->length == new_blob->length &&
+                       memcmp (current_blob->data, new_blob->data,
+                               new_blob->length) == 0;
+
+          drmModeFreePropertyBlob (current_blob);
+          drmModeFreePropertyBlob (new_blob);
+        }
+      drmModeFreeProperty (prop);
+      break;
+    }
+
+  drmModeFreeObjectProperties (props);
+  return is_current;
+}
+
 static gboolean
 process_connector_property (MetaKmsImpl    *impl,
                             MetaKmsUpdate  *update,
@@ -86,6 +145,13 @@ process_connector_property (MetaKmsImpl    *impl,
   int ret;
 
   fd = meta_kms_impl_device_get_fd (impl_device);
+
+  if (connector_property_is_current (fd,
+                                     meta_kms_connector_get_id (connector),
+                                     connector_property->prop_id,
+                                     connector_property->value))
+    return TRUE;
+
 
   ret = drmModeObjectSetProperty (fd,
                                   meta_kms_connector_get_id (connector),
@@ -271,6 +337,66 @@ process_mode_set (MetaKmsImpl     *impl,
   return TRUE;
 }
 
+/* Whether the CRTC's gamma already is this ramp, as its GAMMA_LUT property
+ * has it: setting the same ramp again makes amdgpu re-program the output's
+ * color pipeline, which shows a frame without the HDR transfer function (a
+ * white flash) when a display server takes over from another one. (The
+ * legacy gamma getter can't be used: it returns the last legacy ramp, not a
+ * GAMMA_LUT another display server set atomically.) */
+static gboolean
+crtc_gamma_is_current (int             fd,
+                       uint32_t        crtc_id,
+                       int             size,
+                       const uint16_t *red,
+                       const uint16_t *green,
+                       const uint16_t *blue)
+{
+  drmModeObjectProperties *props;
+  uint64_t blob_id = 0;
+  gboolean found = FALSE;
+  gboolean is_current = FALSE;
+  uint32_t i;
+
+  props = drmModeObjectGetProperties (fd, crtc_id, DRM_MODE_OBJECT_CRTC);
+  if (!props)
+    return FALSE;
+
+  for (i = 0; i < props->count_props && !found; i++)
+    {
+      drmModePropertyRes *prop = drmModeGetProperty (fd, props->props[i]);
+
+      if (prop && g_strcmp0 (prop->name, "GAMMA_LUT") == 0)
+        {
+          blob_id = props->prop_values[i];
+          found = TRUE;
+        }
+      drmModeFreeProperty (prop);
+    }
+  drmModeFreeObjectProperties (props);
+
+  if (found && blob_id != 0 && size > 0)
+    {
+      drmModePropertyBlobRes *blob = drmModeGetPropertyBlob (fd, blob_id);
+
+      if (blob && blob->length == size * sizeof (struct drm_color_lut))
+        {
+          const struct drm_color_lut *lut = blob->data;
+          int j;
+
+          is_current = TRUE;
+          for (j = 0; j < size && is_current; j++)
+            {
+              is_current = lut[j].red == red[j] &&
+                           lut[j].green == green[j] &&
+                           lut[j].blue == blue[j];
+            }
+        }
+      drmModeFreePropertyBlob (blob);
+    }
+
+  return is_current;
+}
+
 static gboolean
 process_crtc_gamma (MetaKmsImpl    *impl,
                     MetaKmsUpdate  *update,
@@ -285,6 +411,10 @@ process_crtc_gamma (MetaKmsImpl    *impl,
   int ret;
 
   fd = meta_kms_impl_device_get_fd (impl_device);
+  if (crtc_gamma_is_current (fd, meta_kms_crtc_get_id (crtc), gamma->size,
+                             gamma->red, gamma->green, gamma->blue))
+    return TRUE;
+
   ret = drmModeCrtcSetGamma (fd, meta_kms_crtc_get_id (crtc),
                              gamma->size,
                              gamma->red,
