@@ -57,6 +57,12 @@ META_EXPORT
 void meta_enable_unredirect_for_display  (MetaDisplay *display);
 
 META_EXPORT
+void meta_release_held_screen_for_display (MetaDisplay *display);
+
+META_EXPORT
+void meta_hold_screen_for_display (MetaDisplay *display);
+
+META_EXPORT
 void meta_focus_stage_window       (MetaDisplay  *display,
                                     guint32       timestamp);
 

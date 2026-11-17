@@ -636,6 +636,54 @@ on_map_effect_complete (ClutterTimeline *timeline, EffectCompleteData *data)
   g_free (data);
 }
 
+/* As a display server, Muffin keeps the previous picture on screen until
+ * there is something to show (meta_release_held_screen_for_display ()): the
+ * first windows, once their contents are drawn (a mapped window's contents
+ * can still be on their way: a client resizing to fullscreen draws again
+ * first), plus a moment for windows mapping along with them. They are shown
+ * as they are, not zoomed in from nothing, as are the windows mapped in the
+ * first second. */
+static gboolean first_windows_done = FALSE;
+static guint first_windows_id = 0;
+static guint show_screen_id = 0;
+static int windows_without_first_frame = 0;
+
+static gboolean
+first_windows_timeout (gpointer user_data)
+{
+  first_windows_id = 0;
+  first_windows_done = TRUE;
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+show_screen (gpointer user_data)
+{
+  MetaPlugin *plugin = user_data;
+
+  show_screen_id = 0;
+  if (windows_without_first_frame > 0)
+    return G_SOURCE_REMOVE;
+
+  meta_release_held_screen_for_display (meta_plugin_get_display (plugin));
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+on_first_frame (MetaWindowActor *window_actor,
+                MetaPlugin      *plugin)
+{
+  g_signal_handlers_disconnect_by_func (window_actor, on_first_frame, plugin);
+
+  windows_without_first_frame--;
+  if (windows_without_first_frame == 0)
+    {
+      g_clear_handle_id (&show_screen_id, g_source_remove);
+      show_screen_id = g_timeout_add (30, show_screen, plugin);
+    }
+}
+
 /*
  * Simple map handler: it applies a scale effect which must be reversed on
  * completion).
@@ -648,6 +696,19 @@ map (MetaPlugin *plugin, MetaWindowActor *window_actor)
   MetaWindow *meta_window = meta_window_actor_get_meta_window (window_actor);
 
   type = meta_window_get_window_type (meta_window);
+
+  if (!first_windows_done)
+    {
+      if (!first_windows_id)
+        first_windows_id = g_timeout_add (1000, first_windows_timeout, NULL);
+
+      windows_without_first_frame++;
+      g_signal_connect (window_actor, "first-frame",
+                        G_CALLBACK (on_first_frame), plugin);
+      clutter_actor_show (actor);
+      meta_plugin_map_completed (plugin, window_actor);
+      return;
+    }
 
   if (type == META_WINDOW_NORMAL)
     {
