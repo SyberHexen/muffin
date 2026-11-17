@@ -56,6 +56,9 @@ typedef struct _MetaKmsConnectorState
   int suggested_y;
   gboolean hotplug_mode_update;
 
+  /* The sink can take a variable refresh rate (KMS "vrr_capable") */
+  gboolean vrr_capable;
+
   MetaMonitorTransform panel_orientation_transform;
 } MetaKmsConnectorState;
 

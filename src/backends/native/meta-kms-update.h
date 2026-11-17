@@ -79,6 +79,11 @@ MetaKmsUpdate * meta_kms_update_new (void);
 
 void meta_kms_update_free (MetaKmsUpdate *update);
 
+void meta_kms_update_set_crtc_property (MetaKmsUpdate *update,
+                                        MetaKmsCrtc   *crtc,
+                                        uint32_t       prop_id,
+                                        uint64_t       value);
+
 void meta_kms_update_mode_set (MetaKmsUpdate   *update,
                                MetaKmsCrtc     *crtc,
                                GList           *connectors,

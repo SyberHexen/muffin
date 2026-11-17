@@ -341,6 +341,20 @@ meta_monitor_is_underscanning (MetaMonitor *monitor)
 }
 
 gboolean
+meta_monitor_is_vrr_capable (MetaMonitor *monitor)
+{
+  return meta_monitor_get_main_output (monitor)->vrr_capable;
+}
+
+MetaOutputVrrMode
+meta_monitor_get_vrr_mode (MetaMonitor *monitor)
+{
+  MetaOutput *output = meta_monitor_get_main_output (monitor);
+
+  return output->vrr_capable ? output->vrr_mode : META_OUTPUT_VRR_MODE_OFF;
+}
+
+gboolean
 meta_monitor_is_laptop_panel (MetaMonitor *monitor)
 {
   MetaOutput *output;

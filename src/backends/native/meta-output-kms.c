@@ -30,6 +30,8 @@
 
 #include "backends/meta-crtc.h"
 #include "backends/native/meta-kms-connector.h"
+#include "backends/native/meta-kms-crtc.h"
+#include "backends/native/meta-kms-device.h"
 #include "backends/native/meta-kms-utils.h"
 #include "backends/native/meta-crtc-kms.h"
 
@@ -287,6 +289,22 @@ init_output_modes (MetaOutput  *output,
   return TRUE;
 }
 
+/* Whether the connector's device has CRTCs that can enable variable refresh */
+static gboolean
+device_can_vary_refresh (MetaKmsConnector *kms_connector)
+{
+  MetaKmsDevice *device = meta_kms_connector_get_device (kms_connector);
+  GList *l;
+
+  for (l = meta_kms_device_get_crtcs (device); l; l = l->next)
+    {
+      if (meta_kms_crtc_get_vrr_enabled_prop_id (l->data))
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 MetaOutput *
 meta_create_kms_output (MetaGpuKms        *gpu_kms,
                         MetaKmsConnector  *kms_connector,
@@ -376,6 +394,7 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
     {
       output->is_primary = old_output->is_primary;
       output->is_presentation = old_output->is_presentation;
+      output->vrr_mode = old_output->vrr_mode;
     }
   else
     {
@@ -388,6 +407,8 @@ meta_create_kms_output (MetaGpuKms        *gpu_kms,
   output->hotplug_mode_update = connector_state->hotplug_mode_update;
   output->supports_underscanning =
     meta_kms_connector_is_underscanning_supported (kms_connector);
+  output->vrr_capable = connector_state->vrr_capable &&
+                        device_can_vary_refresh (kms_connector);
 
   meta_output_parse_edid (output, connector_state->edid_data);
 
