@@ -17862,6 +17862,17 @@ sorted_lists_equal (GList *list_a,
   return FALSE;
 }
 
+/* The transformed geometry of an actor on the pixel grid can come out a
+ * hair off it (1919.9999 for 1920), which would count the actor as on the
+ * monitor next to it as well: snap edges that close to whole pixels */
+static float
+snap_to_pixel_grid (float value)
+{
+  float rounded = roundf (value);
+
+  return fabsf (value - rounded) < 0.001f ? rounded : value;
+}
+
 static void
 update_stage_views (ClutterActor *self)
 {
@@ -17893,6 +17904,17 @@ update_stage_views (ClutterActor *self)
   if (bounding_rect.size.width == 0.0 ||
       bounding_rect.size.height == 0.0)
     goto out;
+
+  {
+    float x1 = snap_to_pixel_grid (bounding_rect.origin.x);
+    float y1 = snap_to_pixel_grid (bounding_rect.origin.y);
+    float x2 = snap_to_pixel_grid (bounding_rect.origin.x +
+                                   bounding_rect.size.width);
+    float y2 = snap_to_pixel_grid (bounding_rect.origin.y +
+                                   bounding_rect.size.height);
+
+    graphene_rect_init (&bounding_rect, x1, y1, x2 - x1, y2 - y1);
+  }
 
   priv->stage_views = clutter_stage_get_views_for_rect (stage,
                                                         &bounding_rect);
