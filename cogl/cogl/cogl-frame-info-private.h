@@ -44,6 +44,12 @@ struct _CoglFrameInfo
 
   int64_t global_frame_counter;
 
+  /* The display's vertical retrace counter when the frame was shown, and
+   * whether presentation_time is the display hardware's (a page flip
+   * event) rather than an estimate */
+  int64_t sequence;
+  gboolean hw_clock;
+
   CoglOutput *output;
 };
 
