@@ -238,6 +238,9 @@ typedef struct _MetaOnscreenNative
   MetaRendererView *view;
   int total_pending_flips;
 
+  /* The frame being flipped is shown at once (direct scanout only) */
+  gboolean next_flip_async;
+
   uint64_t logged_scanout_modifier;
   gboolean logged_scanout_reject;
   gboolean warned_scanout_flip_failed;
@@ -1517,6 +1520,9 @@ meta_onscreen_native_flip_crtc (CoglOnscreen     *onscreen,
                                &page_flip_feedback,
                                g_object_ref (view),
                                kms_update);
+      if (onscreen_native->next_flip_async && gpu_kms == render_gpu)
+        meta_kms_update_set_page_flip_async (kms_update,
+                                             meta_crtc_kms_get_kms_crtc (crtc));
 
       onscreen_native->total_pending_flips++;
       if (secondary_gpu_state)
@@ -2699,9 +2705,17 @@ meta_onscreen_native_direct_scanout (CoglOnscreen *onscreen,
 
   ensure_crtc_modes (onscreen, kms_update);
 
+  /* A view that tears shows its scanout buffer at once (unless the flip
+   * comes with a mode set or atomic state, see meta-kms-impl-simple.c) */
+  onscreen_native->next_flip_async =
+    onscreen_native->view &&
+    clutter_stage_view_is_tearing (CLUTTER_STAGE_VIEW (onscreen_native->view));
+  cogl_frame_info_set_tearing (frame_info, onscreen_native->next_flip_async);
+
   onscreen_native->pending_queue_swap_notify_frame_count =
     renderer_native->frame_counter;
   meta_onscreen_native_flip_crtcs (onscreen, kms_update);
+  onscreen_native->next_flip_async = FALSE;
 
   kms_feedback = meta_kms_post_pending_update_sync (kms);
   if (meta_kms_feedback_get_result (kms_feedback) != META_KMS_FEEDBACK_PASSED)

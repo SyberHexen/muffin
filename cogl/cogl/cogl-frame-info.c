@@ -96,6 +96,19 @@ cogl_frame_info_get_hw_clock (CoglFrameInfo *info)
   return info->hw_clock;
 }
 
+gboolean
+cogl_frame_info_get_tearing (CoglFrameInfo *info)
+{
+  return info->tearing;
+}
+
+void
+cogl_frame_info_set_tearing (CoglFrameInfo *info,
+                             gboolean       tearing)
+{
+  info->tearing = tearing;
+}
+
 void
 cogl_frame_info_set_hw_timing (CoglFrameInfo *info,
                                int64_t        sequence,
