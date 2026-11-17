@@ -343,40 +343,19 @@ on_monitors_changed (MetaMonitorManager *monitor_manager,
 }
 
 static void
-init_keymap (MetaDefaultPlugin *self)
+on_locale_properties (GObject      *source,
+                      GAsyncResult *res,
+                      gpointer      user_data)
 {
   g_autoptr (GError) error = NULL;
-  g_autoptr (GDBusProxy) proxy = NULL;
   g_autoptr (GVariant) result = NULL;
   g_autoptr (GVariant) props = NULL;
   g_autofree char *x11_layout = NULL;
   g_autofree char *x11_options = NULL;
   g_autofree char *x11_variant = NULL;
 
-  proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-                                         G_DBUS_PROXY_FLAGS_NONE,
-                                         NULL,
-                                         "org.freedesktop.locale1",
-                                         "/org/freedesktop/locale1",
-                                         "org.freedesktop.DBus.Properties",
-                                         NULL,
-                                         &error);
-  if (!proxy)
-    {
-      g_message ("Failed to acquire org.freedesktop.locale1 proxy: %s, "
-                 "probably running in CI",
-                 error->message);
-      return;
-    }
-
-  result = g_dbus_proxy_call_sync (proxy,
-                                   "GetAll",
-                                   g_variant_new ("(s)",
-                                                  "org.freedesktop.locale1"),
-                                   G_DBUS_CALL_FLAGS_NONE,
-                                   100,
-                                   NULL,
-                                   &error);
+  result = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source), res,
+                                          &error);
   if (!result)
     {
       g_warning ("Failed to retrieve locale properties: %s", error->message);
@@ -401,6 +380,38 @@ init_keymap (MetaDefaultPlugin *self)
 
   meta_backend_set_keymap (meta_get_backend (),
                            x11_layout, x11_variant, x11_options);
+}
+
+/* The keyboard layout comes from systemd-localed, which is usually started on
+ * demand: ask it without waiting, so that starting up (the first frame, the
+ * clients connecting) doesn't wait for it to start */
+static void
+init_keymap (MetaDefaultPlugin *self)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GDBusConnection) bus = NULL;
+
+  bus = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, &error);
+  if (!bus)
+    {
+      g_message ("Failed to connect to the system bus: %s, "
+                 "probably running in CI",
+                 error->message);
+      return;
+    }
+
+  g_dbus_connection_call (bus,
+                          "org.freedesktop.locale1",
+                          "/org/freedesktop/locale1",
+                          "org.freedesktop.DBus.Properties",
+                          "GetAll",
+                          g_variant_new ("(s)", "org.freedesktop.locale1"),
+                          G_VARIANT_TYPE ("(a{sv})"),
+                          G_DBUS_CALL_FLAGS_NONE,
+                          5000,
+                          NULL,
+                          on_locale_properties,
+                          NULL);
 }
 
 static void
