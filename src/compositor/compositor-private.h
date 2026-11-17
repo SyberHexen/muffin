@@ -88,8 +88,6 @@ MetaLaters * meta_compositor_get_laters (MetaCompositor *compositor);
 
 void meta_update_desklet_stacking (MetaCompositor *compositor);
 
-ClutterActor * meta_get_background_window_group_for_display (MetaDisplay *display);
-
 static inline int64_t
 us (int64_t us)
 {
