@@ -28,6 +28,7 @@
 
 #include "config.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "wayland/meta-wayland-color-management.h"
@@ -81,7 +82,9 @@ typedef struct
   /* wp_color_management_surface_feedback_v1 resources */
   GList *feedback_resources;
   MetaWaylandColorDescription *sdr_output;
-  MetaWaylandColorDescription *hdr10_output;
+  /* Descriptions of HDR displays (get_hdr_output_description()), reused
+   * while a display's values don't change, so its id stays the same */
+  GList *hdr_outputs;
 } MetaWaylandColorManager;
 
 typedef struct
@@ -325,13 +328,21 @@ meta_wayland_color_description_needs_conversion (MetaWaylandColorDescription *de
                                                         &unit_relative);
 }
 
+static MetaWaylandColorDescription *
+get_surface_preferred_description (MetaWaylandSurface *surface);
+
 /* The peak luminance of HDR content, in cd/m², for tone mapping: its
- * maximum content light level, else the peak of its mastering display, else
- * 1000, the most common HDR10 grading target; 0 (not tone mapped) for SDR
- * content, and for HLG, which is shown for the display's peak instead */
+ * maximum content light level, else the peak of its mastering display,
+ * else the peak of the display the surface was told to render for (its
+ * preferred description): content without metadata is taken as made for
+ * it. 0 (not tone mapped) for SDR content, and for HLG, which is shown for
+ * the display's peak instead. */
 float
-meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description)
+meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *description,
+                                                 MetaWaylandSurface          *surface)
 {
+  MetaWaylandColorDescription *preferred;
+
   if (!meta_wayland_color_description_is_hdr (description) ||
       description->tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG)
     return 0.0f;
@@ -340,6 +351,13 @@ meta_wayland_color_description_get_content_peak (MetaWaylandColorDescription *de
   if (description->has_target_luminance &&
       description->target_max_lum > 0)
     return description->target_max_lum;
+
+  preferred = surface ? get_surface_preferred_description (surface) : NULL;
+  if (preferred && preferred->has_target_luminance &&
+      preferred->target_max_lum > 0)
+    return preferred->target_max_lum;
+
+  /* The most common HDR10 grading target */
   return 1000.0f;
 }
 
@@ -352,6 +370,111 @@ meta_wayland_color_description_is_hdr10 (MetaWaylandColorDescription *descriptio
 }
 
 /* What an output expects, from the color mode of its main output */
+#define MAX_HDR_OUTPUT_DESCRIPTIONS 8
+
+static gboolean
+hdr_output_description_matches (MetaWaylandColorDescription *description,
+                                double                       reference_lum,
+                                double                       min_lum,
+                                double                       max_lum,
+                                uint32_t                     max_fall,
+                                gboolean                     has_primaries,
+                                const int32_t               *primaries)
+{
+  return description->reference_lum == reference_lum &&
+         description->target_min_lum == min_lum &&
+         description->target_max_lum == max_lum &&
+         description->max_fall == max_fall &&
+         description->has_target_primaries == has_primaries &&
+         (!has_primaries ||
+          memcmp (description->target_primaries, primaries,
+                  sizeof (description->target_primaries)) == 0);
+}
+
+/* What an HDR display is described to clients as (their preferred
+ * description, and the output's image description): HDR10, i.e. PQ with
+ * BT.2020 primaries, shown on that display, with its luminances and
+ * primaries as the target color volume, as in the HDR_OUTPUT_METADATA
+ * Muffin sends for it (meta-kms-connector.c), and SDR white at the
+ * luminance it's shown at as reference. Clients then make their content for
+ * the display itself. A display of unknown peak is described as a 1000 nit
+ * BT.2020 display, as in the metadata. */
+static MetaWaylandColorDescription *
+get_hdr_output_description (MetaOutput *output)
+{
+  float peak = meta_output_get_hdr_peak_luminance (output);
+  /* The EDID's frame average and minimum describe the display only along
+   * with its peak; a peak the user set comes alone */
+  gboolean from_edid = !output->hdr_peak_luminance;
+  double reference_lum = meta_output_get_sdr_white_level (output);
+  double min_lum, max_lum;
+  uint32_t max_fall;
+  gboolean has_primaries = output->has_edid_primaries;
+  int32_t primaries[8] = { 0 };
+  MetaWaylandColorDescription *description;
+  GList *l;
+  int i;
+
+  if (peak > 0)
+    {
+      max_lum = peak;
+      min_lum = from_edid && output->edid_min_luminance > 0 ?
+                output->edid_min_luminance : 0.005;
+      max_fall = from_edid && output->edid_max_frame_avg > 0 ?
+                 (uint32_t) roundf (output->edid_max_frame_avg) :
+                 (uint32_t) roundf (peak);
+    }
+  else
+    {
+      max_lum = 1000.0;
+      min_lum = 0.005;
+      max_fall = 400;
+    }
+
+  if (has_primaries)
+    {
+      for (i = 0; i < 8; i++)
+        primaries[i] = (int32_t) round (output->edid_primaries[i] * 1000000.0);
+    }
+
+  for (l = color_manager->hdr_outputs; l; l = l->next)
+    {
+      if (hdr_output_description_matches (l->data, reference_lum,
+                                          min_lum, max_lum, max_fall,
+                                          has_primaries, primaries))
+        return l->data;
+    }
+
+  description =
+    color_description_new (WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
+                           WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+  description->reference_lum = reference_lum;
+  description->has_target_luminance = TRUE;
+  description->target_min_lum = min_lum;
+  description->target_max_lum = max_lum;
+  description->max_cll = (uint32_t) round (max_lum);
+  description->max_fall = max_fall;
+  if (has_primaries)
+    {
+      description->has_target_primaries = TRUE;
+      memcpy (description->target_primaries, primaries,
+              sizeof (description->target_primaries));
+    }
+
+  color_manager->hdr_outputs = g_list_prepend (color_manager->hdr_outputs,
+                                               description);
+  if (g_list_length (color_manager->hdr_outputs) > MAX_HDR_OUTPUT_DESCRIPTIONS)
+    {
+      GList *last = g_list_last (color_manager->hdr_outputs);
+
+      meta_wayland_color_description_unref (last->data);
+      color_manager->hdr_outputs =
+        g_list_delete_link (color_manager->hdr_outputs, last);
+    }
+
+  return description;
+}
+
 static MetaWaylandColorDescription *
 get_logical_monitor_description (MetaLogicalMonitor *logical_monitor)
 {
@@ -366,7 +489,7 @@ get_logical_monitor_description (MetaLogicalMonitor *logical_monitor)
       MetaOutput *output = meta_monitor_get_main_output (monitors->data);
 
       if (output->color_mode == META_OUTPUT_COLOR_MODE_BT2100)
-        return color_manager->hdr10_output;
+        return get_hdr_output_description (output);
     }
 
   return color_manager->sdr_output;
@@ -1582,15 +1705,6 @@ meta_wayland_init_color_management (MetaWaylandCompositor *compositor)
     color_description_new (WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22,
                            WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
 
-  /* Matches the HDR_OUTPUT_METADATA Muffin sends in the BT.2100 mode */
-  color_manager->hdr10_output =
-    color_description_new (WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ,
-                           WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
-  color_manager->hdr10_output->has_target_luminance = TRUE;
-  color_manager->hdr10_output->target_min_lum = 0.005;
-  color_manager->hdr10_output->target_max_lum = 1000.0;
-  color_manager->hdr10_output->max_cll = 1000;
-  color_manager->hdr10_output->max_fall = 400;
 
   passthrough.enabled = !g_getenv ("MUFFIN_DEBUG_DISABLE_HDR_PASSTHROUGH");
   passthrough.wanted = g_hash_table_new_full (g_str_hash, g_str_equal,
