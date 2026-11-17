@@ -66,6 +66,9 @@
 #include "backends/x11/meta-backend-x11.h"
 #include "backends/x11/meta-event-x11.h"
 #include "backends/x11/meta-stage-x11.h"
+#ifdef HAVE_NATIVE_BACKEND
+#include "backends/native/meta-renderer-native.h"
+#endif
 #include "clutter/clutter-muffin.h"
 #include "cogl/cogl.h"
 #include "compositor/meta-later-private.h"
@@ -1803,6 +1806,48 @@ meta_compositor_class_init (MetaCompositorClass *klass)
                 G_STRUCT_OFFSET (MetaCompositorClass, pre_paint),
                 NULL, NULL, NULL,
                 G_TYPE_NONE, 0);
+}
+
+/**
+ * meta_release_held_screen_for_display:
+ * @display: a #MetaDisplay
+ *
+ * Starts showing frames.  As a display server, Muffin starts with the screen
+ * held: what the previous display server (a login screen, or the session
+ * before it) left there stays up until the plugin has something to show
+ * and calls this, or a few seconds have passed.  Frames are drawn as usual
+ * meanwhile.  Does nothing when the screen isn't held.
+ */
+void
+meta_release_held_screen_for_display (MetaDisplay *display)
+{
+#ifdef HAVE_NATIVE_BACKEND
+  MetaRenderer *renderer = meta_backend_get_renderer (meta_get_backend ());
+
+  if (META_IS_RENDERER_NATIVE (renderer))
+    meta_renderer_native_release_screen (META_RENDERER_NATIVE (renderer));
+#endif
+}
+
+/**
+ * meta_hold_screen_for_display:
+ * @display: a #MetaDisplay
+ *
+ * Stops showing frames: what is on screen now stays up, until
+ * meta_release_held_screen_for_display () or a few seconds have passed. For
+ * the end of a session, so that its last picture stays up for the next
+ * display server (the login screen) rather than the frames of the session
+ * closing down (its wallpaper and windows going away).
+ */
+void
+meta_hold_screen_for_display (MetaDisplay *display)
+{
+#ifdef HAVE_NATIVE_BACKEND
+  MetaRenderer *renderer = meta_backend_get_renderer (meta_get_backend ());
+
+  if (META_IS_RENDERER_NATIVE (renderer))
+    meta_renderer_native_hold_screen (META_RENDERER_NATIVE (renderer));
+#endif
 }
 
 /**

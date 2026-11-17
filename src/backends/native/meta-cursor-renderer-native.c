@@ -622,6 +622,14 @@ update_hw_cursor (MetaCursorRendererNative *native,
   gboolean painted = FALSE;
   g_autoptr (MetaKmsFeedback) feedback = NULL;
 
+  /* Nothing reaches a held screen; set the cursor once it's released */
+  if (meta_renderer_native_is_screen_held (
+        META_RENDERER_NATIVE (meta_backend_get_renderer (backend))))
+    {
+      priv->hw_state_invalidated = TRUE;
+      return;
+    }
+
   kms_update = meta_kms_ensure_pending_update (kms);
 
   if (cursor_sprite)
