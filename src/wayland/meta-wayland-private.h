@@ -92,6 +92,8 @@ struct _MetaWaylandCompositor
   /* Surfaces with content updates waiting for their constraints */
   GList *queued_update_surfaces;
   guint queued_updates_idle_id;
+  /* Surfaces with a wp_fifo_v1 barrier set */
+  GList *fifo_barrier_surfaces;
 
   /* wp_presentation */
   struct {
