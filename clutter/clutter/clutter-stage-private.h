@@ -65,6 +65,9 @@ void                _clutter_stage_maybe_setup_viewport  (ClutterStage          
 void                _clutter_stage_maybe_relayout        (ClutterActor          *stage);
 gboolean            _clutter_stage_needs_update          (ClutterStage          *stage);
 gboolean            _clutter_stage_needs_stage_update    (ClutterStage          *stage);
+void                _clutter_stage_set_tick_views        (ClutterStage          *stage,
+                                                          GList                 *views);
+GList *             _clutter_stage_get_tick_views        (ClutterStage          *stage);
 gboolean            _clutter_stage_do_update             (ClutterStage          *stage);
 
 CLUTTER_EXPORT
