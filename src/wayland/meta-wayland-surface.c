@@ -50,6 +50,7 @@
 #include "wayland/meta-wayland-keyboard.h"
 #include "wayland/meta-wayland-outputs.h"
 #include "wayland/meta-wayland-pointer.h"
+#include "wayland/meta-wayland-fifo.h"
 #include "wayland/meta-wayland-presentation-time.h"
 #include "wayland/meta-wayland-private.h"
 #include "wayland/meta-wayland-region.h"
@@ -490,6 +491,9 @@ meta_wayland_surface_state_set_default (MetaWaylandSurfaceState *state)
   wl_list_init (&state->frame_callback_list);
   wl_list_init (&state->presentation_feedback_list);
 
+  state->fifo_set_barrier = FALSE;
+  state->fifo_wait_barrier = FALSE;
+
   state->has_new_geometry = FALSE;
   state->has_acked_configure_serial = FALSE;
   state->has_new_min_size = FALSE;
@@ -563,6 +567,9 @@ meta_wayland_surface_state_merge_into (MetaWaylandSurfaceState *from,
   wl_list_insert_list (&to->presentation_feedback_list,
                        &from->presentation_feedback_list);
   wl_list_init (&from->presentation_feedback_list);
+
+  to->fifo_set_barrier |= from->fifo_set_barrier;
+  to->fifo_wait_barrier |= from->fifo_wait_barrier;
 
   cairo_region_union (to->surface_damage, from->surface_damage);
   cairo_region_union (to->buffer_damage, from->buffer_damage);
@@ -981,6 +988,9 @@ cleanup:
                                          &state->presentation_feedback_list,
                                          had_damage);
 
+  if (state->fifo_set_barrier)
+    meta_wayland_fifo_set_barrier (surface, had_damage);
+
   meta_wayland_surface_state_reset (state);
 }
 
@@ -1034,6 +1044,10 @@ update_is_ready (MetaWaylandSurface      *surface,
 {
   if (!surface_takes_update_constraints (surface))
     return TRUE;
+
+  /* Cleared after the next latching deadline, see meta-wayland-fifo.c */
+  if (state->fifo_wait_barrier && surface->fifo.barrier)
+    return FALSE;
 
   return TRUE;
 }
@@ -1859,6 +1873,7 @@ wl_surface_destructor (struct wl_resource *resource)
   meta_wayland_compositor_remove_frame_callback_surface (compositor, surface);
   meta_wayland_presentation_time_surface_destroyed (surface);
   clear_queued_updates (surface);
+  meta_wayland_fifo_surface_destroyed (surface);
 
   g_clear_handle_id (&surface->update_outputs_idle_id, g_source_remove);
   g_hash_table_foreach (surface->outputs_to_destroy_notify_id,

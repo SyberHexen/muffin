@@ -108,6 +108,10 @@ struct _MetaWaylandSurfaceState
   /* wp_presentation.feedback */
   struct wl_list presentation_feedback_list;
 
+  /* wp_fifo_v1 */
+  gboolean fifo_set_barrier;
+  gboolean fifo_wait_barrier;
+
   MetaRectangle new_geometry;
   gboolean has_new_geometry;
 
@@ -205,6 +209,15 @@ struct _MetaWaylandSurface
 
   /* A buffer was committed and not drawn yet (frame callbacks wait) */
   gboolean frame_undrawn;
+
+  /* wp_fifo_v1 */
+  struct {
+    struct wl_resource *resource;
+    /* Updates that wait for the barrier aren't ready while it's set */
+    gboolean barrier;
+    /* The update that set it changed what's on screen */
+    gboolean barrier_needs_paint;
+  } fifo;
 
   /* Content updates committed but not ready to be applied yet (waiting for
    * their constraints), oldest first */
