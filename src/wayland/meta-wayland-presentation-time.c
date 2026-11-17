@@ -254,8 +254,14 @@ send_presented (MetaWaylandCompositor           *compositor,
         }
     }
 
+  /* With VRR, the refresh interval is the shortest one the monitor takes */
   if (wl_resource_get_version (feedback->resource) >= 3)
-    flags |= WP_PRESENTATION_FEEDBACK_KIND_FIXED_RATE;
+    {
+      if (view && clutter_stage_view_is_vrr_active (view))
+        flags |= WP_PRESENTATION_FEEDBACK_KIND_VARIABLE_RATE;
+      else
+        flags |= WP_PRESENTATION_FEEDBACK_KIND_FIXED_RATE;
+    }
 
   tv_sec = time_ns / G_GINT64_CONSTANT (1000000000);
   tv_nsec = time_ns % G_GINT64_CONSTANT (1000000000);
