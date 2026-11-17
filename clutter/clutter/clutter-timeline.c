@@ -112,6 +112,9 @@ struct _ClutterTimelinePrivate
 {
   ClutterTimelineDirection direction;
 
+  /* The actor the timeline animates, whose monitors it ticks with (weak) */
+  ClutterActor *actor;
+
   guint delay_id;
 
   /* The total length in milliseconds of this timeline */
@@ -554,6 +557,8 @@ clutter_timeline_dispose (GObject *object)
   ClutterTimelinePrivate *priv;
 
   priv = self->priv;
+
+  g_clear_weak_pointer (&priv->actor);
 
   clutter_timeline_cancel_delay (self);
 
@@ -1372,6 +1377,40 @@ clutter_timeline_advance (ClutterTimeline *timeline,
   priv = timeline->priv;
 
   priv->elapsed_time = CLAMP (msecs, 0, priv->duration);
+}
+
+/**
+ * clutter_timeline_set_actor:
+ * @timeline: A #ClutterTimeline
+ * @actor: (nullable): the #ClutterActor the timeline animates, or %NULL
+ *
+ * Sets the actor @timeline animates: its frames are then timed by the
+ * monitors @actor is on, rather than by the fastest monitor. Transitions
+ * of an actor's properties do this for their actor already.
+ */
+void
+clutter_timeline_set_actor (ClutterTimeline *timeline,
+                            ClutterActor    *actor)
+{
+  g_return_if_fail (CLUTTER_IS_TIMELINE (timeline));
+  g_return_if_fail (actor == NULL || CLUTTER_IS_ACTOR (actor));
+
+  g_set_weak_pointer (&timeline->priv->actor, actor);
+}
+
+/**
+ * clutter_timeline_get_actor:
+ * @timeline: A #ClutterTimeline
+ *
+ * Returns: (transfer none) (nullable): the actor @timeline animates, as
+ *   set with clutter_timeline_set_actor()
+ */
+ClutterActor *
+clutter_timeline_get_actor (ClutterTimeline *timeline)
+{
+  g_return_val_if_fail (CLUTTER_IS_TIMELINE (timeline), NULL);
+
+  return timeline->priv->actor;
 }
 
 /**
