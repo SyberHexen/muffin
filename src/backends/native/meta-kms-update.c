@@ -323,6 +323,23 @@ meta_kms_update_page_flip (MetaKmsUpdate                 *update,
 }
 
 void
+meta_kms_update_set_page_flip_async (MetaKmsUpdate *update,
+                                     MetaKmsCrtc   *crtc)
+{
+  GList *l;
+
+  g_assert (!meta_kms_update_is_sealed (update));
+
+  for (l = update->page_flips; l; l = l->next)
+    {
+      MetaKmsPageFlip *page_flip = l->data;
+
+      if (page_flip->crtc == crtc)
+        page_flip->async = TRUE;
+    }
+}
+
+void
 meta_kms_update_custom_page_flip (MetaKmsUpdate                 *update,
                                   MetaKmsCrtc                   *crtc,
                                   const MetaKmsPageFlipFeedback *feedback,

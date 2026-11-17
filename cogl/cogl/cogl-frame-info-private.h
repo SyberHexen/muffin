@@ -50,6 +50,9 @@ struct _CoglFrameInfo
   int64_t sequence;
   gboolean hw_clock;
 
+  /* The frame was flipped at once, not at the vertical blank */
+  gboolean tearing;
+
   CoglOutput *output;
 };
 
