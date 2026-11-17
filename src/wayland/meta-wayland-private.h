@@ -89,6 +89,10 @@ struct _MetaWaylandCompositor
   gboolean frame_callbacks_held;
   guint held_frame_callbacks_idle_id;
 
+  /* Surfaces with content updates waiting for their constraints */
+  GList *queued_update_surfaces;
+  guint queued_updates_idle_id;
+
   /* wp_presentation */
   struct {
     /* Surfaces with feedbacks waiting for their content to be drawn */
