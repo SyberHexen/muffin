@@ -85,6 +85,12 @@ struct _MetaWaylandDmaBufBuffer
   int fds[META_WAYLAND_DMA_BUF_MAX_FDS];
   uint32_t offsets[META_WAYLAND_DMA_BUF_MAX_FDS];
   uint32_t strides[META_WAYLAND_DMA_BUF_MAX_FDS];
+
+  /* YUV buffers (NV12, P010): their planes, converted to an RGB texture
+   * (the buffer's texture) each time the buffer is attached */
+  CoglTexture *yuv_planes[2];
+  CoglFramebuffer *yuv_framebuffer;
+  CoglPipeline *yuv_pipeline;
 };
 
 G_DEFINE_TYPE (MetaWaylandDmaBufBuffer, meta_wayland_dma_buf_buffer, G_TYPE_OBJECT);
@@ -151,6 +157,262 @@ G_DEFINE_TYPE (MetaWaylandDmaBufManager, meta_wayland_dma_buf_manager,
 static GQuark quark_dma_buf_surface_feedback;
 
 static gboolean
+drm_format_is_yuv (uint32_t drm_format)
+{
+  return drm_format == DRM_FORMAT_NV12 || drm_format == DRM_FORMAT_P010;
+}
+
+/* The formats a YUV format's luma and chroma planes are sampled as */
+static void
+yuv_plane_formats (uint32_t  drm_format,
+                   uint32_t *luma_format,
+                   uint32_t *chroma_format)
+{
+  if (drm_format == DRM_FORMAT_P010)
+    {
+      *luma_format = DRM_FORMAT_R16;
+      *chroma_format = DRM_FORMAT_GR1616;
+    }
+  else
+    {
+      *luma_format = DRM_FORMAT_R8;
+      *chroma_format = DRM_FORMAT_GR88;
+    }
+}
+
+static const char yuv_to_rgb_glsl[] =
+  "uniform vec2 yuv_offsets;\n"   /* luma, chroma */
+  "uniform vec2 yuv_scales;\n"    /* luma, chroma */
+  "uniform mat3 yuv_to_rgb;\n";
+
+static const char yuv_to_rgb_fragment[] =
+  "float luma = texture2D (cogl_sampler0, cogl_tex_coord0_in.st).r;\n"
+  "vec2 chroma = texture2D (cogl_sampler1, cogl_tex_coord1_in.st).rg;\n"
+  "vec3 ycbcr = vec3 ((luma - yuv_offsets.x) * yuv_scales.x,\n"
+  "                   (chroma - yuv_offsets.y) * yuv_scales.y);\n"
+  "cogl_color_out = vec4 (clamp (yuv_to_rgb * ycbcr, 0.0, 1.0), 1.0);\n";
+
+/* Sets the YCbCr to R'G'B' conversion: the matrix for the luma weights
+ * of the coefficients (BT.601, BT.709 or BT.2020), and the range of the
+ * encoding (limited or full), as sampled from 8 bit planes (NV12) or from
+ * 10 bit values in the high bits of 16 bit planes (P010). */
+static void
+set_yuv_conversion (CoglPipeline *pipeline,
+                    uint32_t      drm_format,
+                    gboolean      full_range,
+                    float         kr,
+                    float         kb)
+{
+  float kg = 1.0f - kr - kb;
+  float matrix[9];
+  float unit, luma_offset, luma_scale, chroma_offset, chroma_scale;
+
+  /* Column-major: R' G' B' from Y' Cb Cr (Cb and Cr centred on 0) */
+  matrix[0] = 1.0f;
+  matrix[1] = 1.0f;
+  matrix[2] = 1.0f;
+  matrix[3] = 0.0f;
+  matrix[4] = -2.0f * kb * (1.0f - kb) / kg;
+  matrix[5] = 2.0f * (1.0f - kb);
+  matrix[6] = 2.0f * (1.0f - kr);
+  matrix[7] = -2.0f * kr * (1.0f - kr) / kg;
+  matrix[8] = 0.0f;
+
+  if (drm_format == DRM_FORMAT_P010)
+    {
+      /* A 10 bit code value v is sampled as v * 64 / 65535 */
+      unit = 64.0f / 65535.0f;
+      if (full_range)
+        {
+          luma_offset = 0.0f;
+          luma_scale = 1.0f / (1023.0f * unit);
+          chroma_offset = 512.0f * unit;
+          chroma_scale = 1.0f / (1023.0f * unit);
+        }
+      else
+        {
+          luma_offset = 64.0f * unit;
+          luma_scale = 1.0f / (876.0f * unit);
+          chroma_offset = 512.0f * unit;
+          chroma_scale = 1.0f / (896.0f * unit);
+        }
+    }
+  else
+    {
+      unit = 1.0f / 255.0f;
+      if (full_range)
+        {
+          luma_offset = 0.0f;
+          luma_scale = 1.0f;
+          chroma_offset = 128.0f * unit;
+          chroma_scale = 1.0f;
+        }
+      else
+        {
+          luma_offset = 16.0f * unit;
+          luma_scale = 1.0f / (219.0f * unit);
+          chroma_offset = 128.0f * unit;
+          chroma_scale = 1.0f / (224.0f * unit);
+        }
+    }
+
+  cogl_pipeline_set_uniform_float (pipeline,
+                                   cogl_pipeline_get_uniform_location (pipeline, "yuv_offsets"),
+                                   2, 1,
+                                   (float[]) { luma_offset, chroma_offset });
+  cogl_pipeline_set_uniform_float (pipeline,
+                                   cogl_pipeline_get_uniform_location (pipeline, "yuv_scales"),
+                                   2, 1,
+                                   (float[]) { luma_scale, chroma_scale });
+  cogl_pipeline_set_uniform_matrix (pipeline,
+                                    cogl_pipeline_get_uniform_location (pipeline, "yuv_to_rgb"),
+                                    3, 1, FALSE, matrix);
+}
+
+/* Imports the planes of a YUV buffer, and sets up its conversion to an RGB
+ * texture: NV12 to 8 bits per channel, P010 to half floats, keeping its
+ * 10 bits. The RGB texture holds the video's own encoding (gamma, PQ or
+ * HLG), which the surface's color state then describes as for any RGB
+ * buffer. */
+static gboolean
+realize_yuv_texture (MetaWaylandBuffer  *buffer,
+                     GError            **error)
+{
+  MetaBackend *backend = meta_get_backend ();
+  MetaEgl *egl = meta_backend_get_egl (backend);
+  ClutterBackend *clutter_backend = meta_backend_get_clutter_backend (backend);
+  CoglContext *cogl_context = clutter_backend_get_cogl_context (clutter_backend);
+  EGLDisplay egl_display = cogl_egl_context_get_egl_display (cogl_context);
+  MetaWaylandDmaBufBuffer *dma_buf = buffer->dma_buf.dma_buf;
+  uint32_t plane_formats[2];
+  CoglTexture2D *rgb_texture;
+  CoglOffscreen *offscreen;
+  CoglSnippet *snippet;
+  int i;
+
+  if (dma_buf->fds[0] < 0 || dma_buf->fds[1] < 0)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                   "A %s buffer needs two planes",
+                   dma_buf->drm_format == DRM_FORMAT_P010 ? "P010" : "NV12");
+      return FALSE;
+    }
+
+  yuv_plane_formats (dma_buf->drm_format, &plane_formats[0], &plane_formats[1]);
+
+  for (i = 0; i < 2; i++)
+    {
+      /* 4:2:0: the chroma plane has half the luma plane's size */
+      int width = i == 0 ? dma_buf->width : (dma_buf->width + 1) / 2;
+      int height = i == 0 ? dma_buf->height : (dma_buf->height + 1) / 2;
+      uint64_t modifier = dma_buf->drm_modifier;
+      EGLImageKHR egl_image;
+      CoglTexture2D *plane;
+
+      egl_image = meta_egl_create_dmabuf_image (egl, egl_display,
+                                                width, height,
+                                                plane_formats[i],
+                                                1,
+                                                &dma_buf->fds[i],
+                                                &dma_buf->strides[i],
+                                                &dma_buf->offsets[i],
+                                                &modifier,
+                                                error);
+      if (egl_image == EGL_NO_IMAGE_KHR)
+        return FALSE;
+
+      /* The Cogl format only says how many channels are sampled; EGL reads
+       * the memory as the plane's DRM format (8 or 16 bits) */
+      plane = cogl_egl_texture_2d_new_from_image (cogl_context,
+                                                  width, height,
+                                                  COGL_PIXEL_FORMAT_RG_88,
+                                                  egl_image,
+                                                  COGL_EGL_IMAGE_FLAG_NO_GET_DATA,
+                                                  error);
+      meta_egl_destroy_image (egl, egl_display, egl_image, NULL);
+      if (!plane)
+        return FALSE;
+
+      dma_buf->yuv_planes[i] = COGL_TEXTURE (plane);
+    }
+
+  rgb_texture =
+    cogl_texture_2d_new_with_format (cogl_context,
+                                     dma_buf->width, dma_buf->height,
+                                     dma_buf->drm_format == DRM_FORMAT_P010 ?
+                                     COGL_PIXEL_FORMAT_RGBA_FP_16161616_PRE :
+                                     COGL_PIXEL_FORMAT_RGBA_8888_PRE);
+  /* Video is opaque */
+  cogl_texture_set_components (COGL_TEXTURE (rgb_texture),
+                               COGL_TEXTURE_COMPONENTS_RGB);
+  if (!cogl_texture_allocate (COGL_TEXTURE (rgb_texture), error))
+    {
+      cogl_object_unref (rgb_texture);
+      return FALSE;
+    }
+
+  offscreen = cogl_offscreen_new_with_texture (COGL_TEXTURE (rgb_texture));
+  if (!cogl_framebuffer_allocate (COGL_FRAMEBUFFER (offscreen), error))
+    {
+      cogl_object_unref (offscreen);
+      cogl_object_unref (rgb_texture);
+      return FALSE;
+    }
+  cogl_framebuffer_orthographic (COGL_FRAMEBUFFER (offscreen),
+                                 0, 0, dma_buf->width, dma_buf->height,
+                                 -1.0, 1.0);
+
+  dma_buf->yuv_pipeline = cogl_pipeline_new (cogl_context);
+  for (i = 0; i < 2; i++)
+    {
+      cogl_pipeline_set_layer_texture (dma_buf->yuv_pipeline, i,
+                                       dma_buf->yuv_planes[i]);
+      cogl_pipeline_set_layer_filters (dma_buf->yuv_pipeline, i,
+                                       COGL_PIPELINE_FILTER_LINEAR,
+                                       COGL_PIPELINE_FILTER_LINEAR);
+      cogl_pipeline_set_layer_wrap_mode (dma_buf->yuv_pipeline, i,
+                                         COGL_PIPELINE_WRAP_MODE_CLAMP_TO_EDGE);
+    }
+  snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
+                              yuv_to_rgb_glsl, NULL);
+  cogl_snippet_set_replace (snippet, yuv_to_rgb_fragment);
+  cogl_pipeline_add_snippet (dma_buf->yuv_pipeline, snippet);
+  cogl_object_unref (snippet);
+  cogl_pipeline_set_blend (dma_buf->yuv_pipeline, "RGBA = ADD (SRC_COLOR, 0)",
+                           NULL);
+
+  dma_buf->yuv_framebuffer = COGL_FRAMEBUFFER (offscreen);
+  buffer->dma_buf.texture = COGL_TEXTURE (rgb_texture);
+  buffer->is_y_inverted = dma_buf->is_y_inverted;
+
+  return TRUE;
+}
+
+/* Converts what the client drew into the YUV buffer's planes to its RGB
+ * texture; done whenever the buffer is attached, since the client may have
+ * drawn into it again since */
+static void
+convert_yuv_texture (MetaWaylandBuffer *buffer)
+{
+  MetaWaylandDmaBufBuffer *dma_buf = buffer->dma_buf.dma_buf;
+  /* BT.709 for 8 bit video, BT.2020 for 10 bit (HDR) video, limited range,
+   * as video usually is */
+  gboolean is_p010 = dma_buf->drm_format == DRM_FORMAT_P010;
+  float kr = is_p010 ? 0.2627f : 0.2126f;
+  float kb = is_p010 ? 0.0593f : 0.0722f;
+  const float coords[8] = { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f };
+
+  set_yuv_conversion (dma_buf->yuv_pipeline, dma_buf->drm_format,
+                      FALSE, kr, kb);
+  cogl_framebuffer_draw_multitextured_rectangle (dma_buf->yuv_framebuffer,
+                                                 dma_buf->yuv_pipeline,
+                                                 0, 0,
+                                                 dma_buf->width,
+                                                 dma_buf->height,
+                                                 coords, 8);
+}
+
+static gboolean
 meta_wayland_dma_buf_realize_texture (MetaWaylandBuffer  *buffer,
                                       GError            **error)
 {
@@ -169,6 +431,9 @@ meta_wayland_dma_buf_realize_texture (MetaWaylandBuffer  *buffer,
 
   if (buffer->dma_buf.texture)
     return TRUE;
+
+  if (drm_format_is_yuv (dma_buf->drm_format))
+    return realize_yuv_texture (buffer, error);
 
   switch (dma_buf->drm_format)
     {
@@ -270,6 +535,9 @@ meta_wayland_dma_buf_buffer_attach (MetaWaylandBuffer  *buffer,
 {
   if (!meta_wayland_dma_buf_realize_texture (buffer, error))
     return FALSE;
+
+  if (buffer->dma_buf.dma_buf->yuv_pipeline)
+    convert_yuv_texture (buffer);
 
   cogl_clear_object (texture);
   *texture = cogl_object_ref (buffer->dma_buf.texture);
@@ -1379,6 +1647,24 @@ send_modifiers (struct wl_resource *resource,
   g_free (modifiers);
 }
 
+static gboolean
+manager_has_format (MetaWaylandDmaBufManager *dma_buf_manager,
+                    uint32_t                  drm_format)
+{
+  guint i;
+
+  for (i = 0; i < dma_buf_manager->formats->len; i++)
+    {
+      MetaWaylandDmaBufFormat *format =
+        &g_array_index (dma_buf_manager->formats, MetaWaylandDmaBufFormat, i);
+
+      if (format->drm_format == drm_format)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 static void
 dma_buf_bind (struct wl_client *client,
               void             *data,
@@ -1412,6 +1698,12 @@ dma_buf_bind (struct wl_client *client,
   send_modifiers (resource, DRM_FORMAT_XBGR16161616F);
   send_modifiers (resource, DRM_FORMAT_XRGB16161616F);
   send_modifiers (resource, DRM_FORMAT_ARGB16161616F);
+
+  /* YUV only where its planes can be imported too */
+  if (manager_has_format (dma_buf_manager, DRM_FORMAT_NV12))
+    send_modifiers (resource, DRM_FORMAT_NV12);
+  if (manager_has_format (dma_buf_manager, DRM_FORMAT_P010))
+    send_modifiers (resource, DRM_FORMAT_P010);
 }
 
 static void
@@ -1529,7 +1821,25 @@ static const uint32_t supported_formats[] = {
   DRM_FORMAT_XBGR16161616F,
   DRM_FORMAT_XRGB16161616F,
   DRM_FORMAT_ARGB16161616F,
+  DRM_FORMAT_NV12,
+  DRM_FORMAT_P010,
 };
+
+static gboolean
+driver_has_format (const EGLint *driver_formats,
+                   EGLint        num_formats,
+                   uint32_t      drm_format)
+{
+  EGLint i;
+
+  for (i = 0; i < num_formats; i++)
+    {
+      if ((uint32_t) driver_formats[i] == drm_format)
+        return TRUE;
+    }
+
+  return FALSE;
+}
 
 static gboolean
 init_formats (MetaWaylandDmaBufManager  *dma_buf_manager,
@@ -1570,6 +1880,20 @@ init_formats (MetaWaylandDmaBufManager  *dma_buf_manager,
         {
           if ((EGLint) supported_formats[i] == driver_formats[j])
             {
+              uint32_t luma_format, chroma_format;
+
+              /* YUV buffers are imported plane by plane */
+              if (drm_format_is_yuv (supported_formats[i]))
+                {
+                  yuv_plane_formats (supported_formats[i],
+                                     &luma_format, &chroma_format);
+                  if (!driver_has_format (driver_formats, num_formats,
+                                          luma_format) ||
+                      !driver_has_format (driver_formats, num_formats,
+                                          chroma_format))
+                    break;
+                }
+
               add_format (dma_buf_manager, egl_display, supported_formats[i]);
               break;
             }
@@ -1794,6 +2118,11 @@ meta_wayland_dma_buf_buffer_finalize (GObject *object)
 {
   MetaWaylandDmaBufBuffer *dma_buf = META_WAYLAND_DMA_BUF_BUFFER (object);
   int i;
+
+  g_clear_pointer (&dma_buf->yuv_pipeline, cogl_object_unref);
+  g_clear_pointer (&dma_buf->yuv_framebuffer, cogl_object_unref);
+  for (i = 0; i < 2; i++)
+    g_clear_pointer (&dma_buf->yuv_planes[i], cogl_object_unref);
 
   for (i = 0; i < META_WAYLAND_DMA_BUF_MAX_FDS; i++)
     {
