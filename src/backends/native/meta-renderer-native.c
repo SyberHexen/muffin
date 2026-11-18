@@ -1691,7 +1691,7 @@ copy_shared_framebuffer_gpu (CoglOnscreen                        *onscreen,
   buffer_gbm =
     meta_drm_buffer_gbm_new_lock_front (secondary_gpu_state->gpu_kms,
                                         secondary_gpu_state->gbm.surface,
-                                        renderer_gpu_data->use_modifiers,
+                                        renderer_gpu_data->register_modifiers,
                                         &error);
   if (!buffer_gbm)
     {
