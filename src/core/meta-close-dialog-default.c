@@ -120,6 +120,7 @@ meta_close_dialog_default_show (MetaCloseDialog *dialog)
 {
   MetaCloseDialogDefault *dialog_default = META_CLOSE_DIALOG_DEFAULT (dialog);
   MetaWindow *window = dialog_default->window;
+  MetaX11Display *x11_display = window->display->x11_display;
   gchar *window_title, *window_content, *tmp;
   GPid dialog_pid;
 
@@ -161,7 +162,8 @@ meta_close_dialog_default_show (MetaCloseDialog *dialog)
   dialog_pid =
     meta_show_dialog ("--question",
                       window_content, NULL,
-                      window->display->x11_display->screen_name,
+                      /* A Wayland session may run without an X server */
+                      x11_display ? x11_display->screen_name : NULL,
                       _("_Force Quit"), _("_Wait"),
                       window->xwindow,
                       NULL, NULL);
