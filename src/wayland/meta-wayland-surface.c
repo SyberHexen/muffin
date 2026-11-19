@@ -1139,6 +1139,13 @@ queued_buffer_resource_destroyed (MetaWaylandBuffer       *buffer,
   g_clear_signal_handler (&state->buffer_destroy_handler_id, buffer);
   state->buffer = NULL;
   state->newly_attached = FALSE;
+
+  /* The damage was for that buffer's content: applied without it, it would
+   * land on the surface's current buffer, which may be gone too */
+  cairo_region_destroy (state->surface_damage);
+  state->surface_damage = cairo_region_create ();
+  cairo_region_destroy (state->buffer_damage);
+  state->buffer_damage = cairo_region_create ();
 }
 
 static void
